@@ -36,6 +36,10 @@ The system provides two modes of operation:
 
 ---
 
+<img src="public/landing.png" alt="landing" width="900"/>
+<img src="public/dash1.png" alt="landing" width="900"/>
+<img src="public/dash2.png" alt="landing" width="900"/>
+
 ## Architecture
 
 ```
