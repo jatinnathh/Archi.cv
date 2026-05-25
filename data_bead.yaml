@@ -1,7 +1,0 @@
-path: yolo_data
-
-train: images/train_bead
-val: images/train_bead
-
-names:
-  0: bead_factory
