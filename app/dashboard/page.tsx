@@ -621,13 +621,13 @@ function Tape() {
         <span>YOLO-V8 · 28 FPS</span>
         <span>SHEET D-01 / EVALUATION</span>
         <span><b>►</b> READY FOR INPUT</span>
-        <span>DRAFTED IN AHMEDABAD — IIT GN</span>
+        <span>DRAFTED IN AHMEDABAD</span>
         <span>BUILD 0.4.1 — STABLE</span>
         <span><b>● LIVE</b> &nbsp; DASHBOARD ACTIVE</span>
         <span>YOLO-V8 · 28 FPS</span>
         <span>SHEET D-01 / EVALUATION</span>
         <span><b>►</b> READY FOR INPUT</span>
-        <span>DRAFTED IN AHMEDABAD — IIT GN</span>
+        <span>DRAFTED IN AHMEDABAD</span>
         <span>BUILD 0.4.1 — STABLE</span>
       </div>
     </div>

@@ -312,4 +312,3 @@ The overall layout score is a weighted composite ranging from 0 to 100:
 ## License
 
 Academic project — spatial planning analysis system.
-Built at IIT Gandhinagar.

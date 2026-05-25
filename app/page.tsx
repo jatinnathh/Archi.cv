@@ -1103,13 +1103,13 @@ export default function Home() {
           <span>FRAMERATE 28 FPS</span>
           <span>ZONING COMPLIANCE — 2 VIOLATIONS</span>
           <span><b>►</b> SNAPSHOT_LOTHAL_03.JSON SAVED</span>
-          <span>DRAFTED IN AHMEDABAD — IIT GN</span>
+          <span>DRAFTED IN AHMEDABAD</span>
           <span>BUILD 0.4.1 — STABLE</span>
           <span><b>● LIVE</b> &nbsp; YOLO-V8 DETECTION ACTIVE &nbsp; / &nbsp; 6 OBJECTS TRACKED</span>
           <span>FRAMERATE 28 FPS</span>
           <span>ZONING COMPLIANCE — 2 VIOLATIONS</span>
           <span><b>►</b> SNAPSHOT_LOTHAL_03.JSON SAVED</span>
-          <span>DRAFTED IN AHMEDABAD — IIT GN</span>
+          <span>DRAFTED IN AHMEDABAD</span>
           <span>BUILD 0.4.1 — STABLE</span>
         </div>
       </div>
@@ -1510,7 +1510,7 @@ export default function Home() {
         <div className="rule" />
         <div className="foot-inner">
           <div className="left">plan.vision</div>
-          <div className="mid">Drafted in the spirit of Lothal · IIT Gandhinagar</div>
+          <div className="mid">Drafted in the spirit of Lothal · Ahmedabad</div>
           <div className="right">© {new Date().getFullYear()} · all sheets reserved</div>
         </div>
       </footer>
