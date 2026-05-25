@@ -91,21 +91,6 @@ Annotations were exported in YOLO format (normalized `class x_center y_center wi
 
 The model was trained using the Ultralytics YOLOv8 framework. Key training parameters:
 
-```yaml
-# data.yaml
-path: C:/Users/Jatin/Desktop/Town Planning/yolo_data2/yolo_data
-train: images/train
-val: images/train
-
-names:
-  0: warehouse
-  1: reservoir
-  2: loading_platform
-  3: dockyard
-  4: citadel
-  5: big_house
-  6: bead_factory
-```
 
 Training was executed across multiple runs with iterative refinement of the dataset (augmentation, re-labeling ambiguous samples, adding edge cases). The final production model is located at:
 
