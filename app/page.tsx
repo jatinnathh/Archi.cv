@@ -1,1573 +1,797 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState, useCallback } from "react";
+import * as THREE from "three";
 
-/* ──────────────────────────────────────────────────────────────────────────
-   PLAN.VISION — Landing
-   Concept: An architect's working drawing comes alive. Blueprint paper,
-   stamps, margin notes, a live "detection viewport", and a real sense
-   that a human laid this out. No generic SaaS gradients.
-   ────────────────────────────────────────────────────────────────────── */
+// ─── helpers ────────────────────────────────────────────────────────────────
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-type Block = {
-  id: string;
-  x: number;        // % of viewport
-  y: number;        // % of viewport
-  w: number;        // px
-  h: number;        // px
-  label: string;
-  code: string;
-  color: string;
-  conf: number;     // 0..1
+const fadeRange = (p: number, inS: number, inE: number, outS: number, outE: number): number => {
+  if (p <= inS || p >= outE) return 0;
+  if (p >= inE && p <= outS) return 1;
+  if (p < inE) return (p - inS) / (inE - inS);
+  return 1 - (p - outS) / (outE - outS);
 };
 
-const SEED_BLOCKS: Block[] = [
-  { id: "B-01", x: 18, y: 32, w: 78, h: 78, label: "Residential", code: "RES",  color: "#22c55e", conf: 0.96 },
-  { id: "B-02", x: 41, y: 26, w: 62, h: 62, label: "Reservoir",   code: "UTL",  color: "#38bdf8", conf: 0.91 },
-  { id: "B-03", x: 63, y: 38, w: 90, h: 70, label: "Warehouse",   code: "IND",  color: "#f59e0b", conf: 0.88 },
-  { id: "B-04", x: 28, y: 64, w: 56, h: 56, label: "Residential", code: "RES",  color: "#22c55e", conf: 0.94 },
-  { id: "B-05", x: 55, y: 70, w: 70, h: 70, label: "Factory",     code: "IND",  color: "#ef4444", conf: 0.83 },
-  { id: "B-06", x: 78, y: 58, w: 50, h: 50, label: "Road",        color: "#a3a3a3", code: "INF", conf: 0.79 },
+// ─── types ──────────────────────────────────────────────────────────────────
+interface Beat {
+  start: number; fadeIn: number; fadeOut: number; end: number;
+  align: "left" | "right" | "center";
+  tag: string; headline: string; body: string; sub?: string;
+  accent: string;
+}
+
+const BEATS: Beat[] = [
+  {
+    start: 0.0, fadeIn: 0.03, fadeOut: 0.10, end: 0.16,
+    align: "center",
+    tag: "URBAN CANVAS",
+    headline: "Design the city\nyou imagine.",
+    body: "A challenge platform for architects and visionaries. Place buildings, parks, roads, and landmarks — then let the algorithm judge your city.",
+    accent: "#C8A96E",
+  },
+  {
+    start: 0.15, fadeIn: 0.20, fadeOut: 0.32, end: 0.38,
+    align: "left",
+    tag: "PLACE & PLAN",
+    headline: "Every block\na decision.",
+    body: "Drag and drop zoning models onto the canvas. Residential towers, green corridors, commercial hubs — every placement shifts your score in real time.",
+    sub: "Zoning logic meets creative intuition.",
+    accent: "#C8A96E",
+  },
+  {
+    start: 0.38, fadeIn: 0.44, fadeOut: 0.56, end: 0.62,
+    align: "right",
+    tag: "THE SCORE",
+    headline: "Your city,\ngraded.",
+    body: "An intelligent scoring engine evaluates density, walkability, green space, and flow. Every layout earns a grade — from D to S tier.",
+    sub: "From concept sketch to scored masterplan.",
+    accent: "#00D6FF",
+  },
+  {
+    start: 0.62, fadeIn: 0.67, fadeOut: 0.78, end: 0.84,
+    align: "left",
+    tag: "COMPETE & COMPARE",
+    headline: "Beat the\nleaderboard.",
+    body: "Submit your design to the global challenge. Architects, students, and urban dreamers compete on the same canvas. Only the best plans rise to the top.",
+    sub: "100+ active challenges. New maps every week.",
+    accent: "#00D6FF",
+  },
+  {
+    start: 0.84, fadeIn: 0.88, fadeOut: 0.97, end: 1.0,
+    align: "center",
+    tag: "YOUR BLUEPRINT",
+    headline: "Draw it.\nScore it.\nOwn it.",
+    body: "Whether you are a seasoned architect or a first-time planner, the canvas is yours. Start building — the city is waiting for your vision.",
+    accent: "#C8A96E",
+  },
 ];
 
-export default function Home() {
-  const [time, setTime] = useState("");
-  const [scanLine, setScanLine] = useState(0);
-  const [activeBlock, setActiveBlock] = useState<string>("B-03");
-  const [coords, setCoords] = useState({ x: 0, y: 0 });
-  const [score, setScore] = useState({ zoning: 72, coverage: 88, connect: 64, density: 81 });
-  const heroRef = useRef<HTMLDivElement | null>(null);
+// ─── component ──────────────────────────────────────────────────────────────
+export default function SacredCityPage() {
+  const router = useRouter();
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const catCanvasRef   = useRef<HTMLCanvasElement>(null);
+  const cityCanvasRef  = useRef<HTMLCanvasElement>(null);
+  const catWrapRef     = useRef<HTMLDivElement>(null);
+  const cityWrapRef    = useRef<HTMLDivElement>(null);
+  const overlayRef     = useRef<HTMLDivElement>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const navRef         = useRef<HTMLElement>(null);
 
-  // Live clock (gives the page real "session" feel)
+  const catImages  = useRef<HTMLImageElement[]>([]);
+  const cityImages = useRef<HTMLImageElement[]>([]);
+
+  const [loadPct, setLoadPct]       = useState(0);
+  const [isLoaded, setIsLoaded]     = useState(false);
+  const [fadingOut, setFadingOut]   = useState(false);
+  const [navVisible, setNavVisible] = useState(false);
+
+  const targetP  = useRef(0);
+  const easedP   = useRef(0);
+  const beatRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const threeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const mouse          = useRef({ x: 0, y: 0 });
+
+  // ── mouse tracking ────────────────────────────────────────────────────────
   useEffect(() => {
-    const tick = () => {
-      const d = new Date();
-      const hh = d.getHours().toString().padStart(2, "0");
-      const mm = d.getMinutes().toString().padStart(2, "0");
-      const ss = d.getSeconds().toString().padStart(2, "0");
-      setTime(`${hh}:${mm}:${ss}`);
+    const onMouseMove = (e: MouseEvent) => {
+      mouse.current.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.current.y = -(e.clientY / window.innerHeight) * 2 + 1;
     };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
+    window.addEventListener("mousemove", onMouseMove, { passive: true });
+    return () => window.removeEventListener("mousemove", onMouseMove);
   }, []);
 
-  // Scanning beam across the detection viewport
+  // ── preload ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    let raf = 0;
-    let t = 0;
-    const loop = () => {
-      t += 0.6;
-      setScanLine((Math.sin(t * 0.03) * 0.5 + 0.5) * 100);
-      raf = requestAnimationFrame(loop);
+    const total = 240;
+    let doneC = 0, doneCity = 0;
+    const check = () => {
+      const pct = Math.round(((doneC + doneCity) / (total * 2)) * 100);
+      setLoadPct(pct);
+      if (doneC === total && doneCity === total) {
+        setFadingOut(true);
+        setTimeout(() => setIsLoaded(true), 700);
+      }
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    for (let i = 1; i <= total; i++) {
+      const img = new Image();
+      img.src = `/cathedralpng/ezgif-frame-${String(i).padStart(3, "0")}.png`;
+      img.onload = () => { catImages.current[i - 1] = img; doneC++; check(); };
+      img.onerror = () => { doneC++; check(); };
+    }
+    for (let i = 1; i <= total; i++) {
+      const img = new Image();
+      img.src = `/city/ezgif-frame-${String(i).padStart(3, "0")}.jpg`;
+      img.onload = () => { cityImages.current[i - 1] = img; doneCity++; check(); };
+      img.onerror = () => { doneCity++; check(); };
+    }
   }, []);
 
-  // Rotate "active detection" so the page never feels static
+  // ── scroll ─────────────────────────────────────────────────────────────────
   useEffect(() => {
-    let i = 0;
-    const id = setInterval(() => {
-      i = (i + 1) % SEED_BLOCKS.length;
-      setActiveBlock(SEED_BLOCKS[i].id);
-      // wiggle scores a little to feel alive
-      setScore((s) => ({
-        zoning: clamp(s.zoning + rand(-3, 3), 50, 95),
-        coverage: clamp(s.coverage + rand(-2, 2), 60, 98),
-        connect: clamp(s.connect + rand(-4, 4), 40, 90),
-        density: clamp(s.density + rand(-3, 3), 55, 95),
-      }));
-    }, 2200);
-    return () => clearInterval(id);
+    const onScroll = () => {
+      const c = containerRef.current;
+      if (!c) return;
+      const sh = c.scrollHeight - window.innerHeight;
+      targetP.current = Math.max(0, Math.min(1, window.scrollY / sh));
+      setNavVisible(window.scrollY > 80);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Track mouse for the survey crosshair
+  // ── resize observer — keeps canvas buffer = CSS size × DPR ────────────────
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const el = heroRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      setCoords({
-        x: Math.round(((e.clientX - r.left) / r.width) * 1000) / 10,
-        y: Math.round(((e.clientY - r.top) / r.height) * 1000) / 10,
+    if (!isLoaded) return;
+    const dpr = window.devicePixelRatio || 1;
+    const sync = (cv: HTMLCanvasElement) => {
+      const r = cv.getBoundingClientRect();
+      const w = Math.round(r.width * dpr);
+      const h = Math.round(r.height * dpr);
+      if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    };
+    const ro = new ResizeObserver(() => {
+      if (catCanvasRef.current)  sync(catCanvasRef.current);
+      if (cityCanvasRef.current) sync(cityCanvasRef.current);
+    });
+    if (catCanvasRef.current)  { sync(catCanvasRef.current);  ro.observe(catCanvasRef.current); }
+    if (cityCanvasRef.current) { sync(cityCanvasRef.current); ro.observe(cityCanvasRef.current); }
+  }, [isLoaded]);
+
+  // ── Three.js dynamic background ───────────────────────────────────────────
+  useEffect(() => {
+    if (!isLoaded || !threeCanvasRef.current) return;
+
+    const canvas = threeCanvasRef.current;
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+
+    const scene = new THREE.Scene();
+
+    // Camera setup
+    const camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 100);
+    camera.position.set(0, 10, 24);
+    camera.lookAt(0, 0, 0);
+
+    // Light setups
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.08);
+    scene.add(ambientLight);
+
+    // Gold light (Cathedral Phase)
+    const goldLight = new THREE.PointLight(0xC8A96E, 8, 45);
+    goldLight.position.set(-12, 6, 8);
+    scene.add(goldLight);
+
+    // Cyan light (City Phase)
+    const cyanLight = new THREE.PointLight(0x00D6FF, 8, 45);
+    cyanLight.position.set(12, -4, 8);
+    scene.add(cyanLight);
+
+    // Wavy Blueprint Grid Geometry
+    const gridGeometry = new THREE.PlaneGeometry(70, 70, 48, 48);
+    const gridMaterial = new THREE.MeshBasicMaterial({
+      color: 0x444444,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.1,
+    });
+    const grid = new THREE.Mesh(gridGeometry, gridMaterial);
+    grid.rotation.x = -Math.PI / 2;
+    scene.add(grid);
+
+    // Floating Glassmorphic/Wireframe Blocks (Architectural models)
+    const blocksGroup = new THREE.Group();
+    const blocksCount = 16;
+    const blockData: { mesh: THREE.Mesh; initialY: number; speed: number; rotSpeed: { x: number; y: number } }[] = [];
+
+    const glassMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.06,
+      roughness: 0.15,
+      metalness: 0.1,
+      transmission: 0.75,
+      ior: 1.45,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    const edgeMaterialGold = new THREE.LineBasicMaterial({
+      color: 0xC8A96E,
+      transparent: true,
+      opacity: 0.22,
+    });
+
+    const edgeMaterialCyan = new THREE.LineBasicMaterial({
+      color: 0x00D6FF,
+      transparent: true,
+      opacity: 0.22,
+    });
+
+    for (let i = 0; i < blocksCount; i++) {
+      const w = Math.random() * 2 + 1;
+      const h = Math.random() * 5 + 2;
+      const d = Math.random() * 2 + 1;
+      const geometry = new THREE.BoxGeometry(w, h, d);
+      
+      const mesh = new THREE.Mesh(geometry, glassMaterial);
+      
+      // Wireframe outline for model architectural edges
+      const edges = new THREE.EdgesGeometry(geometry);
+      const edgeMat = Math.random() > 0.5 ? edgeMaterialGold : edgeMaterialCyan;
+      const line = new THREE.LineSegments(edges, edgeMat);
+      mesh.add(line);
+
+      // Distribute randomly across the drafting grid
+      const x = (Math.random() - 0.5) * 40;
+      const initialY = -h / 2 - 3 - Math.random() * 6; // submerged under grid initially
+      const z = (Math.random() - 0.5) * 40;
+      mesh.position.set(x, initialY, z);
+
+      blocksGroup.add(mesh);
+      blockData.push({
+        mesh,
+        initialY,
+        speed: Math.random() * 0.4 + 0.6,
+        rotSpeed: {
+          x: (Math.random() - 0.5) * 0.003,
+          y: (Math.random() - 0.5) * 0.003,
+        }
       });
+    }
+    scene.add(blocksGroup);
+
+    // Urban Data Particles
+    const particlesCount = 250;
+    const positions = new Float32Array(particlesCount * 3);
+    for (let i = 0; i < particlesCount * 3; i += 3) {
+      positions[i] = (Math.random() - 0.5) * 60;
+      positions[i + 1] = Math.random() * 35 - 10;
+      positions[i + 2] = (Math.random() - 0.5) * 60;
+    }
+    const particlesGeometry = new THREE.BufferGeometry();
+    particlesGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const particlesMaterial = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.06,
+      transparent: true,
+      opacity: 0.2,
+    });
+    const particles = new THREE.Points(particlesGeometry, particlesMaterial);
+    scene.add(particles);
+
+    // Custom resize listener
+    const handleResize = () => {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height, false);
     };
-    window.addEventListener("mousemove", onMove);
-    return () => window.removeEventListener("mousemove", onMove);
-  }, []);
+    window.addEventListener("resize", handleResize);
 
-  // Reveal-on-scroll for sections (subtle, not the same canned thing)
-  useEffect(() => {
-    const obs = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => {
-          if (e.isIntersecting) e.target.classList.add("is-in");
+    // Frame animation loop
+    let animId: number;
+    let clock = new THREE.Clock();
+
+    const animate = () => {
+      animId = requestAnimationFrame(animate);
+      const time = clock.getElapsedTime();
+      const p = easedP.current;
+
+      // 1. Blueprint Grid waves distortion
+      const pos = gridGeometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const y = pos.getY(i);
+        // Harmonic waves representing urban acoustic resonance
+        const z = Math.sin(x * 0.1 + time * 0.8) * Math.cos(y * 0.1 + time * 0.8) * 0.9;
+        pos.setZ(i, z);
+      }
+      pos.needsUpdate = true;
+
+      // 2. Animate architectural building placements
+      blockData.forEach((data) => {
+        data.mesh.rotation.y += data.rotSpeed.y;
+        data.mesh.rotation.x += data.rotSpeed.x;
+
+        // Rise from the grid as user scrolls deeper into the city canvas
+        const targetY = data.initialY + p * 20 * data.speed;
+        data.mesh.position.y = lerp(data.mesh.position.y, targetY, 0.04);
+      });
+
+      // 3. Update Camera placement with mouse parallax and scroll transition
+      const targetCamX = mouse.current.x * 4;
+      const targetCamY = 10 - mouse.current.y * 3 + p * 6;
+      const targetCamZ = 24 - p * 8; // move closer as city builds
+
+      camera.position.x = lerp(camera.position.x, targetCamX, 0.04);
+      camera.position.y = lerp(camera.position.y, targetCamY, 0.04);
+      camera.position.z = lerp(camera.position.z, targetCamZ, 0.04);
+      camera.lookAt(0, p * 4, 0);
+
+      // 4. Update lights behavior
+      goldLight.intensity = (1 - p) * 10 + 1.5;
+      cyanLight.intensity = p * 10 + 1.5;
+
+      // 5. Slowly move particles upwards
+      const particlePos = particlesGeometry.attributes.position.array as Float32Array;
+      for (let i = 1; i < particlesCount * 3; i += 3) {
+        particlePos[i] += 0.015;
+        if (particlePos[i] > 25) {
+          particlePos[i] = -10;
+        }
+      }
+      particlesGeometry.attributes.position.needsUpdate = true;
+
+      renderer.render(scene, camera);
+    };
+
+    animate();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener("resize", handleResize);
+
+      // Resource Disposal
+      gridGeometry.dispose();
+      gridMaterial.dispose();
+      glassMaterial.dispose();
+      edgeMaterialGold.dispose();
+      edgeMaterialCyan.dispose();
+      particlesGeometry.dispose();
+      particlesMaterial.dispose();
+
+      blockData.forEach((data) => {
+        data.mesh.geometry.dispose();
+        data.mesh.children.forEach((child) => {
+          if (child instanceof THREE.LineSegments) {
+            child.geometry.dispose();
+          }
         });
-      },
-      { threshold: 0.12 }
-    );
-    document.querySelectorAll<HTMLElement>("[data-rise]").forEach((el) => obs.observe(el));
-    return () => obs.disconnect();
+      });
+
+      renderer.dispose();
+    };
+  }, [isLoaded]);
+
+  // ── draw helper (cover mode) ───────────────────────────────────────────────
+  const draw = useCallback((cv: HTMLCanvasElement, img: HTMLImageElement | null) => {
+    if (!cv || !img) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    const cw = cv.width, ch = cv.height;
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    const cr = cw / ch, ir = iw / ih;
+    let dw: number, dh: number, dx: number, dy: number;
+    if (cr > ir) { dw = cw; dh = cw / ir; dx = 0; dy = (ch - dh) / 2; }
+    else         { dh = ch; dw = ch * ir; dy = 0; dx = (cw - dw) / 2; }
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(img, dx, dy, dw, dh);
   }, []);
 
-  const composite = Math.round((score.zoning + score.coverage + score.connect + score.density) / 4);
+  // ── main RAF loop ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isLoaded) return;
+    let id: number;
+
+    const loop = () => {
+      easedP.current = lerp(easedP.current, targetP.current, 0.07);
+      const p = easedP.current;
+
+      // ── progress bar
+      if (progressBarRef.current)
+        progressBarRef.current.style.width = `${p * 100}%`;
+
+      // ── phase split: 0..0.5 = cathedral, 0.5..1.0 = city
+      const catPhase  = Math.max(0, Math.min(1, p / 0.5));
+      const cityPhase = Math.max(0, Math.min(1, (p - 0.5) / 0.5));
+
+      const catFrame  = Math.max(0, Math.min(239, Math.round(catPhase  * 239)));
+      const cityFrame = Math.max(0, Math.min(239, Math.round(cityPhase * 239)));
+
+      const catCv  = catCanvasRef.current;
+      const cityCv = cityCanvasRef.current;
+      const catW   = catWrapRef.current;
+      const cityW  = cityWrapRef.current;
+
+      // ── draw frames
+      if (p <= 0.55) draw(catCv!,  catImages.current[catFrame] ?? null);
+      if (p >= 0.45) draw(cityCv!, cityImages.current[cityFrame] ?? null);
+
+      // ── ROTATION
+      const catRot  = lerp(-1, 12, Math.min(1, p / 0.5));
+      const cityRot = lerp(10, 30, Math.max(0, Math.min(1, (p - 0.5) / 0.5)));
+
+      // ── OPACITY + POSITION
+      const catOpacity  = p < 0.45 ? 1 : p > 0.58 ? 0 : 1 - (p - 0.45) / 0.13;
+      const cityOpacity = p < 0.42 ? 0 : p > 0.55 ? 1 : (p - 0.42) / 0.13;
+
+      const catTop  = lerp(6,  28, Math.min(1, p / 0.5));
+      const catLeft = lerp(3,  8,  Math.min(1, p / 0.5));
+      const cityBottom = lerp(6, 24, Math.max(0, Math.min(1, (p - 0.5) / 0.5)));
+      const cityRight  = lerp(3, 8,  Math.max(0, Math.min(1, (p - 0.5) / 0.5)));
+
+      if (catW) {
+        catW.style.transform  = `rotate(${catRot}deg)`;
+        catW.style.opacity    = String(catOpacity);
+        catW.style.top        = `${catTop}vh`;
+        catW.style.left       = `${catLeft}vw`;
+      }
+      if (cityW) {
+        cityW.style.transform  = `rotate(${cityRot}deg)`;
+        cityW.style.opacity    = String(cityOpacity);
+        cityW.style.bottom     = `${cityBottom}vh`;
+        cityW.style.right      = `${cityRight}vw`;
+      }
+
+      // ── BEAT TEXT overlays
+      beatRefs.current.forEach((el, i) => {
+        if (!el) return;
+        const b = BEATS[i];
+        const op = fadeRange(p, b.start, b.fadeIn, b.fadeOut, b.end);
+        const ty = op < 1 && p < b.fadeIn ? lerp(36, 0, (p - b.start) / (b.fadeIn - b.start)) : 0;
+        el.style.opacity = String(op);
+        el.style.transform = `translateY(${ty}px)`;
+      });
+
+      id = requestAnimationFrame(loop);
+    };
+
+    loop();
+    return () => cancelAnimationFrame(id);
+  }, [isLoaded, draw]);
+
+  // ── nav opacity
+  useEffect(() => {
+    if (navRef.current) {
+      navRef.current.style.opacity    = navVisible ? "1" : "0";
+      navRef.current.style.transform  = navVisible ? "translateY(0)" : "translateY(-6px)";
+    }
+  }, [navVisible]);
 
   return (
-    <div className="pv-root">
-      <style jsx global>{`
-        @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
-        :root {
-          --paper: #ecead8;          /* warm blueprint paper */
-          --paper-2: #e3e0c8;
-          --ink: #0e1726;             /* deep ink */
-          --ink-soft: #2a3346;
-          --rule: #6b7280;
-          --rule-soft: rgba(14, 23, 38, 0.16);
-          --rule-hair: rgba(14, 23, 38, 0.08);
-          --accent: #ff5722;          /* surveyor's orange */
-          --accent-2: #1e6feb;        /* drafting blue */
-          --good: #1f7a3a;
-          --warn: #b45309;
-          --bad:  #b91c1c;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { background: var(--paper); color: var(--ink); }
-        body {
-          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-          font-feature-settings: "ss01", "cv11";
-          -webkit-font-smoothing: antialiased;
-          overflow-x: hidden;
-          background-image:
-            radial-gradient(rgba(14,23,38,0.045) 1px, transparent 1px),
-            radial-gradient(rgba(14,23,38,0.025) 1px, transparent 1px);
-          background-size: 24px 24px, 24px 24px;
-          background-position: 0 0, 12px 12px;
-        }
-
-        ::selection { background: var(--ink); color: var(--paper); }
-
-        .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-        .serif { font-family: 'Instrument Serif', 'Times New Roman', serif; font-style: italic; }
-
-        /* ── Top marquee tape ── */
-        .tape {
-          background: var(--ink);
-          color: var(--paper);
-          border-bottom: 1px solid #000;
-          overflow: hidden;
-          position: relative;
-        }
-        .tape-track {
-          display: flex;
-          gap: 3rem;
-          padding: 0.55rem 0;
-          white-space: nowrap;
-          animation: slide 38s linear infinite;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.72rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-        }
-        .tape-track span { opacity: 0.85; }
-        .tape-track b { color: var(--accent); font-weight: 700; }
-        @keyframes slide {
-          from { transform: translateX(0); }
-          to   { transform: translateX(-50%); }
-        }
-
-        /* ── Nav ── */
-        .nav {
-          position: sticky;
-          top: 0;
-          z-index: 50;
-          display: grid;
-          grid-template-columns: 1fr auto 1fr;
-          align-items: center;
-          padding: 1rem 2rem;
-          background: rgba(236, 234, 216, 0.85);
-          backdrop-filter: blur(8px);
-          border-bottom: 1px solid var(--rule-soft);
-        }
-        .nav-logo {
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 1.6rem;
-          letter-spacing: -0.01em;
-          color: var(--ink);
-          text-decoration: none;
-          display: inline-flex;
-          align-items: baseline;
-          gap: 0.35rem;
-        }
-        .nav-logo .stamp {
-          font-family: 'JetBrains Mono', monospace;
-          font-style: normal;
-          font-size: 0.6rem;
-          letter-spacing: 0.18em;
-          background: var(--accent);
-          color: #fff;
-          padding: 2px 6px;
-          border-radius: 2px;
-          transform: translateY(-6px);
-        }
-        .nav-mid {
-          display: flex;
-          gap: 2rem;
-          justify-content: center;
-        }
-        .nav-mid a {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.72rem;
-          letter-spacing: 0.15em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-          text-decoration: none;
-          position: relative;
-          padding: 4px 2px;
-        }
-        .nav-mid a::after {
-          content: '';
-          position: absolute; left: 0; bottom: -2px;
-          width: 0; height: 1px; background: var(--ink);
-          transition: width 0.25s ease;
-        }
-        .nav-mid a:hover { color: var(--ink); }
-        .nav-mid a:hover::after { width: 100%; }
-        .nav-right {
-          justify-self: end;
-          display: flex;
-          align-items: center;
-          gap: 1rem;
-        }
-        .nav-clock {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.72rem;
-          color: var(--ink-soft);
-          letter-spacing: 0.1em;
-        }
-        .nav-clock .dot {
-          display: inline-block;
-          width: 6px; height: 6px;
-          background: var(--accent);
-          border-radius: 50%;
-          margin-right: 8px;
-          animation: pulse 1.6s ease-in-out infinite;
-          vertical-align: middle;
-        }
-        @keyframes pulse {
-          0%,100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.4; transform: scale(0.75); }
-        }
-
-        .btn {
-          display: inline-flex; align-items: center; gap: 0.6rem;
-          padding: 0.7rem 1.2rem;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.74rem;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          text-decoration: none;
-          border-radius: 0;
-          cursor: pointer;
-          transition: transform 0.15s ease, background 0.2s, color 0.2s;
-          border: 1px solid var(--ink);
-        }
-        .btn-ink   { background: var(--ink); color: var(--paper); }
-        .btn-ink:hover { background: var(--accent); border-color: var(--accent); }
-        .btn-ghost { background: transparent; color: var(--ink); }
-        .btn-ghost:hover { background: var(--ink); color: var(--paper); }
-        .btn .arrow { transition: transform 0.2s; }
-        .btn:hover .arrow { transform: translateX(3px); }
-
-        /* ── Hero grid ── */
-        .hero {
-          position: relative;
-          padding: 2.5rem 2rem 1rem;
-          min-height: 92vh;
-          display: grid;
-          grid-template-columns: 1.05fr 1fr;
-          gap: 2rem;
-          align-items: stretch;
-          border-bottom: 1px solid var(--rule-soft);
-        }
-
-        /* Margin tick rulers on the page */
-        .hero::before, .hero::after {
-          content: '';
-          position: absolute;
-          top: 0; bottom: 0;
-          width: 14px;
-          background-image: repeating-linear-gradient(
-            to bottom,
-            var(--rule-soft) 0 1px,
-            transparent 1px 12px
-          );
-        }
-        .hero::before { left: 0; }
-        .hero::after  { right: 0; }
-
-        .hero-left {
-          position: relative;
-          padding: 1rem 0.5rem 0 1rem;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-        }
-
-        .doc-meta {
-          display: flex;
-          gap: 2.5rem;
-          margin-bottom: 2.25rem;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.7rem;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-        }
-        .doc-meta div b {
-          display: block;
-          color: var(--ink);
-          font-weight: 700;
-          margin-top: 2px;
-        }
-
-        .eyebrow {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.6rem;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.72rem;
-          letter-spacing: 0.22em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-          margin-bottom: 1.5rem;
-        }
-        .eyebrow::before {
-          content: '';
-          width: 28px; height: 1px; background: var(--ink);
-        }
-
-        .h1 {
-          font-family: 'Inter', sans-serif;
-          font-weight: 800;
-          font-size: clamp(2.6rem, 6.2vw, 5.4rem);
-          line-height: 0.95;
-          letter-spacing: -0.045em;
-          color: var(--ink);
-          margin-bottom: 1.25rem;
-        }
-        .h1 .serif {
-          font-weight: 400;
-          color: var(--accent);
-        }
-        .h1 .underline {
-          position: relative;
-          display: inline-block;
-        }
-        .h1 .underline::after {
-          content: '';
-          position: absolute;
-          left: -2px; right: -2px; bottom: 4px;
-          height: 12px;
-          background: var(--accent);
-          opacity: 0.22;
-          z-index: -1;
-          transform: skewX(-12deg);
-        }
-
-        .lede {
-          font-size: 1.05rem;
-          line-height: 1.65;
-          color: var(--ink-soft);
-          max-width: 540px;
-          margin-bottom: 2rem;
-        }
-        .lede b { color: var(--ink); font-weight: 600; }
-
-        .hero-cta {
-          display: flex; gap: 0.75rem; flex-wrap: wrap;
-          margin-bottom: 2.5rem;
-        }
-
-        .key-stats {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 0;
-          border-top: 1px solid var(--ink);
-          padding-top: 1rem;
-          max-width: 600px;
-        }
-        .key-stats > div {
-          padding-right: 1rem;
-          border-right: 1px solid var(--rule-soft);
-        }
-        .key-stats > div:last-child { border-right: none; }
-        .key-stats .num {
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 2rem;
-          line-height: 1;
-          color: var(--ink);
-        }
-        .key-stats .lbl {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.62rem;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-          margin-top: 6px;
-        }
-
-        /* Margin note (handwritten feel) */
-        .margin-note {
-          position: absolute;
-          right: 14%;
-          top: 8%;
-          max-width: 200px;
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 1.05rem;
-          line-height: 1.35;
-          color: var(--accent);
-          transform: rotate(-4deg);
-          padding-left: 16px;
-        }
-        .margin-note::before {
-          content: '';
-          position: absolute;
-          left: 0; top: 8px; bottom: 8px;
-          width: 2px;
-          background: var(--accent);
-        }
-
-        /* ── Detection viewport (right side) ── */
-        .viewport-wrap {
-          position: relative;
-          padding: 0.6rem 0.6rem 0;
-        }
-        .viewport {
-          position: relative;
-          width: 100%;
-          height: 100%;
-          min-height: 520px;
-          background: #0e1726;
-          border: 1px solid var(--ink);
-          box-shadow: 8px 8px 0 0 var(--ink);
-          overflow: hidden;
-          color: #d7e3f3;
-        }
-        .viewport-grid {
-          position: absolute; inset: 0;
-          background-image:
-            linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px),
-            linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-          background-size: 80px 80px, 80px 80px, 16px 16px, 16px 16px;
-        }
-        .viewport-noise {
-          position: absolute; inset: 0;
-          background-image: radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px);
-          background-size: 3px 3px;
-          mix-blend-mode: overlay;
-          opacity: 0.5;
-          pointer-events: none;
-        }
-        .viewport-scan {
-          position: absolute; left: 0; right: 0;
-          height: 80px;
-          background: linear-gradient(to bottom,
-            transparent,
-            rgba(56,189,248,0.18),
-            transparent);
-          pointer-events: none;
-        }
-        .viewport-corner {
-          position: absolute;
-          width: 18px; height: 18px;
-          border: 2px solid var(--accent);
-        }
-        .vc-tl { top: 10px; left: 10px;     border-right: none; border-bottom: none; }
-        .vc-tr { top: 10px; right: 10px;    border-left: none;  border-bottom: none; }
-        .vc-bl { bottom: 10px; left: 10px;  border-right: none; border-top: none; }
-        .vc-br { bottom: 10px; right: 10px; border-left: none;  border-top: none; }
-
-        .viewport-bar {
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          display: flex;
-          justify-content: space-between;
-          padding: 10px 16px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.65rem;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-          color: rgba(215,227,243,0.65);
-          border-bottom: 1px solid rgba(255,255,255,0.08);
-          background: rgba(0,0,0,0.25);
-          z-index: 5;
-        }
-        .viewport-bar .rec {
-          color: var(--accent);
-          display: inline-flex; align-items: center; gap: 6px;
-        }
-        .viewport-bar .rec::before {
-          content: ''; width: 7px; height: 7px;
-          background: var(--accent); border-radius: 50%;
-          animation: pulse 1.4s ease-in-out infinite;
-        }
-
-        .det {
-          position: absolute;
-          transform: translate(-50%, -50%);
-          pointer-events: none;
-        }
-        .det-box {
-          width: 100%; height: 100%;
-          border: 1.5px solid var(--accent-color, var(--accent));
-          background: color-mix(in srgb, var(--accent-color, var(--accent)) 14%, transparent);
-          position: relative;
-        }
-        .det.is-active .det-box {
-          border-width: 2px;
-          box-shadow: 0 0 0 2px rgba(0,0,0,0.25), 0 0 22px var(--accent-color, var(--accent));
-        }
-        .det-tag {
-          position: absolute;
-          top: -22px; left: -1px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.6rem;
-          letter-spacing: 0.1em;
-          background: var(--accent-color, var(--accent));
-          color: #0b1320;
-          padding: 2px 6px;
-          font-weight: 700;
-          white-space: nowrap;
-        }
-        .det-id {
-          position: absolute;
-          bottom: -16px; right: 0;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.58rem;
-          color: rgba(255,255,255,0.55);
-          letter-spacing: 0.1em;
-        }
-
-        /* Crosshair */
-        .xhair { position: absolute; pointer-events: none; z-index: 6; }
-        .xhair::before, .xhair::after {
-          content: '';
-          position: absolute;
-          background: rgba(255,87,34,0.45);
-        }
-        .xhair::before { left: -10px; right: -10px; top: 50%; height: 1px; }
-        .xhair::after  { top: -10px; bottom: -10px; left: 50%; width: 1px; }
-
-        .viewport-footer {
-          position: absolute;
-          bottom: 0; left: 0; right: 0;
-          padding: 10px 16px;
-          background: rgba(0,0,0,0.35);
-          border-top: 1px solid rgba(255,255,255,0.08);
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.65rem;
-          color: rgba(215,227,243,0.7);
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          z-index: 5;
-        }
-        .viewport-footer .ok { color: #4ade80; }
-        .viewport-footer .warn { color: #fbbf24; }
-
-        /* Score readout floating card */
-        .readout {
-          position: absolute;
-          left: -28px;
-          bottom: -28px;
-          background: var(--paper);
-          border: 1px solid var(--ink);
-          box-shadow: 6px 6px 0 0 var(--accent);
-          padding: 1.1rem 1.25rem;
-          width: 280px;
-          z-index: 5;
-        }
-        .readout h4 {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.62rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-          margin-bottom: 0.75rem;
-          display: flex;
-          justify-content: space-between;
-        }
-        .readout h4 .grade {
-          color: var(--accent);
-          font-weight: 700;
-        }
-        .readout-row {
-          display: grid;
-          grid-template-columns: 70px 1fr 36px;
-          gap: 8px;
-          align-items: center;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.7rem;
-          margin: 6px 0;
-          color: var(--ink-soft);
-        }
-        .readout-row .bar {
-          height: 6px;
-          background: var(--rule-soft);
-          position: relative;
-          overflow: hidden;
-        }
-        .readout-row .bar > span {
-          position: absolute; left: 0; top: 0; bottom: 0;
-          background: var(--ink);
-          transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
-        }
-        .readout-row .val { color: var(--ink); font-weight: 700; text-align: right; }
-        .readout-total {
-          margin-top: 12px;
-          padding-top: 10px;
-          border-top: 1px dashed var(--rule-soft);
-          display: flex;
-          justify-content: space-between;
-          align-items: baseline;
-        }
-        .readout-total .num {
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 2.6rem;
-          line-height: 1;
-          color: var(--ink);
-        }
-        .readout-total .lbl {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.6rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-        }
-
-        /* ── Section common ── */
-        section { position: relative; }
-        .container {
-          max-width: 1240px;
-          margin: 0 auto;
-          padding: 6rem 2rem;
-        }
-        .container.tight { padding: 4rem 2rem; }
-
-        .section-head {
-          display: grid;
-          grid-template-columns: 1fr 1.4fr;
-          gap: 3rem;
-          margin-bottom: 4rem;
-          align-items: end;
-        }
-        .sec-num {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.72rem;
-          letter-spacing: 0.2em;
-          color: var(--accent);
-          text-transform: uppercase;
-        }
-        .sec-h {
-          font-family: 'Inter', sans-serif;
-          font-weight: 800;
-          font-size: clamp(2rem, 4vw, 3.2rem);
-          line-height: 1;
-          letter-spacing: -0.035em;
-          margin-top: 1rem;
-        }
-        .sec-h .serif {
-          color: var(--accent);
-        }
-        .sec-lede {
-          font-size: 1.02rem;
-          line-height: 1.7;
-          color: var(--ink-soft);
-          padding-bottom: 0.3rem;
-        }
-
-        /* ── Steps (numbered, big serif numerals) ── */
-        .steps {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 0;
-          border-top: 2px solid var(--ink);
-          border-bottom: 2px solid var(--ink);
-        }
-        .step {
-          padding: 2.5rem 2rem;
-          border-right: 1px solid var(--rule-soft);
-          position: relative;
-          background: var(--paper);
-          transition: background 0.25s ease;
-        }
-        .step:last-child { border-right: none; }
-        .step:hover { background: var(--paper-2); }
-        .step-num {
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 4.4rem;
-          line-height: 1;
-          color: var(--accent);
-          margin-bottom: 1.5rem;
-          letter-spacing: -0.04em;
-        }
-        .step-h {
-          font-size: 1.4rem;
-          font-weight: 700;
-          letter-spacing: -0.015em;
-          margin-bottom: 0.75rem;
-        }
-        .step-p {
-          color: var(--ink-soft);
-          line-height: 1.7;
-          font-size: 0.96rem;
-        }
-        .step-tag {
-          position: absolute;
-          top: 1rem; right: 1rem;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.6rem;
-          letter-spacing: 0.16em;
-          color: var(--ink-soft);
-          text-transform: uppercase;
-        }
-
-        /* ── Capability cards — asymmetric magazine layout ── */
-        .caps {
-          display: grid;
-          grid-template-columns: repeat(12, 1fr);
-          gap: 1rem;
-        }
-        .cap {
-          border: 1px solid var(--ink);
-          padding: 2rem 1.75rem;
-          background: var(--paper);
-          position: relative;
-          transition: transform 0.25s ease, box-shadow 0.25s ease;
-        }
-        .cap:hover {
-          transform: translate(-2px, -4px);
-          box-shadow: 6px 8px 0 0 var(--ink);
-        }
-        .cap-1 { grid-column: span 7; }
-        .cap-2 { grid-column: span 5; background: var(--ink); color: var(--paper); }
-        .cap-3 { grid-column: span 5; }
-        .cap-4 { grid-column: span 7; }
-
-        .cap-head {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 1.5rem;
-        }
-        .cap-id {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.62rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-        }
-        .cap-2 .cap-id { color: rgba(236,234,216,0.55); }
-        .cap-badge {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.58rem;
-          letter-spacing: 0.18em;
-          padding: 3px 8px;
-          border: 1px solid var(--ink);
-          text-transform: uppercase;
-        }
-        .cap-2 .cap-badge { border-color: var(--paper); }
-        .cap-h {
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 2.25rem;
-          line-height: 1;
-          letter-spacing: -0.02em;
-          margin-bottom: 1rem;
-        }
-        .cap-p {
-          line-height: 1.7;
-          color: var(--ink-soft);
-          font-size: 0.98rem;
-          max-width: 52ch;
-        }
-        .cap-2 .cap-p { color: rgba(236,234,216,0.75); }
-        .cap-vis {
-          margin-top: 1.5rem;
-          padding-top: 1.25rem;
-          border-top: 1px dashed var(--rule-soft);
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.72rem;
-          letter-spacing: 0.1em;
-          color: var(--ink);
-          display: flex;
-          gap: 1.2rem;
-          flex-wrap: wrap;
-        }
-        .cap-2 .cap-vis { border-top-color: rgba(236,234,216,0.25); color: var(--paper); }
-        .cap-vis .ok::before { content: '◉ '; color: var(--good); }
-        .cap-vis .x::before { content: '✕ '; color: var(--bad); }
-
-        /* Mini vis: scoring ring */
-        .ring {
-          --p: 78;
-          width: 110px; height: 110px;
-          border-radius: 50%;
-          background:
-            conic-gradient(var(--accent) calc(var(--p) * 1%), rgba(255,255,255,0.08) 0);
-          display: grid; place-items: center;
-          margin-top: 1rem;
-        }
-        .ring > div {
-          width: 84px; height: 84px;
-          background: var(--ink);
-          border-radius: 50%;
-          display: grid; place-items: center;
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 1.8rem;
-          color: var(--paper);
-        }
-
-        /* ── Spec / Workflow Strip ── */
-        .strip {
-          background: var(--ink);
-          color: var(--paper);
-          padding: 4rem 2rem;
-        }
-        .strip-inner {
-          max-width: 1240px; margin: 0 auto;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 3rem;
-          align-items: center;
-        }
-        .strip .sec-num { color: var(--accent); }
-        .strip h3 {
-          font-family: 'Inter', sans-serif;
-          font-weight: 800;
-          font-size: clamp(2rem, 3.8vw, 3rem);
-          line-height: 1;
-          letter-spacing: -0.035em;
-          margin-top: 0.75rem;
-          margin-bottom: 1.5rem;
-        }
-        .strip h3 .serif { color: var(--accent); }
-        .strip p {
-          line-height: 1.7;
-          color: rgba(236,234,216,0.75);
-          font-size: 1rem;
-          max-width: 48ch;
-        }
-        .keycaps {
-          display: flex; gap: 0.75rem; align-items: center;
-          margin-top: 1.5rem;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.78rem;
-          color: rgba(236,234,216,0.7);
-        }
-        .kbd {
-          display: inline-grid; place-items: center;
-          min-width: 32px; height: 32px;
-          padding: 0 8px;
-          background: #1a2336;
-          border: 1px solid rgba(236,234,216,0.18);
-          border-bottom-width: 3px;
-          font-weight: 700;
-          color: var(--paper);
-          border-radius: 4px;
-        }
-
-        /* Side-by-side compare visual */
-        .compare {
-          background: rgba(255,255,255,0.04);
-          border: 1px solid rgba(236,234,216,0.18);
-          padding: 1.25rem;
-        }
-        .compare-row {
-          display: grid;
-          grid-template-columns: 80px 1fr 50px 1fr 50px;
-          gap: 10px;
-          align-items: center;
-          padding: 10px 0;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.7rem;
-          color: rgba(236,234,216,0.75);
-          border-bottom: 1px dashed rgba(236,234,216,0.12);
-        }
-        .compare-row:last-child { border-bottom: none; }
-        .compare-row .label { text-transform: uppercase; letter-spacing: 0.14em; }
-        .compare-row .bar {
-          height: 6px;
-          background: rgba(236,234,216,0.1);
-          position: relative;
-          overflow: hidden;
-        }
-        .compare-row .bar > span {
-          position: absolute; left: 0; top: 0; bottom: 0;
-          background: var(--paper);
-        }
-        .compare-row .bar.alt > span { background: var(--accent); }
-        .compare-row .v { color: var(--paper); font-weight: 700; text-align: right; }
-        .compare-head {
-          display: grid;
-          grid-template-columns: 80px 1fr 50px 1fr 50px;
-          gap: 10px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.6rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-          color: rgba(236,234,216,0.5);
-          margin-bottom: 8px;
-          padding-bottom: 6px;
-          border-bottom: 1px solid rgba(236,234,216,0.18);
-        }
-
-        /* ── Stack section ── */
-        .stack {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 3rem;
-          align-items: center;
-        }
-        .stack-list {
-          border-top: 1px solid var(--ink);
-        }
-        .stack-row {
-          display: grid;
-          grid-template-columns: 40px 1fr auto auto;
-          gap: 1.5rem;
-          align-items: center;
-          padding: 1.1rem 0;
-          border-bottom: 1px solid var(--rule-soft);
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.85rem;
-          cursor: default;
-          transition: background 0.2s, padding 0.2s;
-        }
-        .stack-row:hover {
-          background: var(--paper-2);
-          padding-left: 12px;
-          padding-right: 12px;
-        }
-        .stack-row .idx {
-          font-family: 'Instrument Serif', serif;
-          font-style: italic;
-          font-size: 1.2rem;
-          color: var(--accent);
-        }
-        .stack-row .name {
-          font-weight: 700;
-          color: var(--ink);
-          letter-spacing: 0;
-          font-family: 'Inter', sans-serif;
-          font-size: 1.1rem;
-        }
-        .stack-row .role {
-          color: var(--ink-soft);
-          font-size: 0.7rem;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-        }
-        .stack-row .ver {
-          color: var(--ink);
-          font-size: 0.72rem;
-        }
-
-        /* ── CTA Block ── */
-        .cta {
-          padding: 6rem 2rem;
-          border-top: 2px solid var(--ink);
-          border-bottom: 2px solid var(--ink);
-          position: relative;
-          overflow: hidden;
-        }
-        .cta::before {
-          content: '';
-          position: absolute;
-          inset: 0;
-          background-image:
-            repeating-linear-gradient(45deg, transparent 0 14px, rgba(14,23,38,0.04) 14px 16px);
-          pointer-events: none;
-        }
-        .cta-inner {
-          max-width: 1240px;
-          margin: 0 auto;
-          display: grid;
-          grid-template-columns: 1.4fr 1fr;
-          gap: 2rem;
-          align-items: end;
-          position: relative;
-        }
-        .cta h2 {
-          font-family: 'Inter', sans-serif;
-          font-weight: 800;
-          font-size: clamp(2.4rem, 6vw, 5rem);
-          line-height: 0.95;
-          letter-spacing: -0.04em;
-        }
-        .cta h2 .serif { color: var(--accent); }
-        .cta p {
-          color: var(--ink-soft);
-          line-height: 1.7;
-          margin-bottom: 1.5rem;
-          font-size: 1rem;
-        }
-
-        /* ── Footer ── */
-        .foot {
-          padding: 3rem 2rem 2rem;
-          background: var(--paper);
-        }
-        .foot-inner {
-          max-width: 1240px; margin: 0 auto;
-          display: grid;
-          grid-template-columns: 1fr auto 1fr;
-          gap: 2rem;
-          align-items: center;
-        }
-        .foot .left { font-family: 'Instrument Serif', serif; font-style: italic; font-size: 1.2rem; }
-        .foot .mid {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.66rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-          text-align: center;
-        }
-        .foot .right {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.66rem;
-          letter-spacing: 0.18em;
-          text-transform: uppercase;
-          color: var(--ink-soft);
-          text-align: right;
-        }
-        .foot .rule {
-          max-width: 1240px; margin: 0 auto 1.25rem;
-          height: 1px; background: var(--ink);
-        }
-
-        /* ── Reveal ── */
-        [data-rise] {
-          opacity: 0;
-          transform: translateY(20px);
-          transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2,0.7,0.2,1);
-        }
-        [data-rise].is-in {
-          opacity: 1;
-          transform: translateY(0);
-        }
-
-        /* ── Responsive ── */
-        @media (max-width: 1024px) {
-          .hero { grid-template-columns: 1fr; }
-          .margin-note { display: none; }
-          .readout { left: 8px; right: 8px; width: auto; bottom: -20px; }
-          .section-head { grid-template-columns: 1fr; gap: 1rem; }
-          .steps { grid-template-columns: 1fr; }
-          .step { border-right: none; border-bottom: 1px solid var(--rule-soft); }
-          .cap-1, .cap-2, .cap-3, .cap-4 { grid-column: span 12; }
-          .strip-inner { grid-template-columns: 1fr; }
-          .stack { grid-template-columns: 1fr; }
-          .cta-inner { grid-template-columns: 1fr; }
-          .foot-inner { grid-template-columns: 1fr; text-align: center; }
-          .foot .right, .foot .mid { text-align: center; }
-        }
-        @media (max-width: 640px) {
-          .nav { grid-template-columns: 1fr auto; }
-          .nav-mid { display: none; }
-          .doc-meta { gap: 1.2rem; flex-wrap: wrap; }
-          .key-stats { grid-template-columns: repeat(2, 1fr); }
-          .key-stats > div { padding: 0.5rem 1rem 0.5rem 0; border-bottom: 1px solid var(--rule-soft); }
-        }
+    <div
+      ref={containerRef}
+      style={{ backgroundColor: "#050505", width: "100%", height: "600vh", position: "relative", fontFamily: "'Cormorant Garamond', Georgia, serif" }}
+    >
+      {/* ── Google Font import ────────────────────────────────────────── */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400&family=DM+Mono:wght@300;400&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; cursor: default !important; }
+        canvas { cursor: default !important; }
+        ::selection { background: rgba(200,169,110,0.3); }
+        body { overflow-x: hidden; }
+        a, button { cursor: pointer !important; }
       `}</style>
 
-      {/* ── Ticker Tape ── */}
-      <div className="tape" aria-hidden>
-        <div className="tape-track">
-          <span><b>● LIVE</b> &nbsp; YOLO-V8 DETECTION ACTIVE &nbsp; / &nbsp; 6 OBJECTS TRACKED</span>
-          <span>FRAMERATE 28 FPS</span>
-          <span>ZONING COMPLIANCE — 2 VIOLATIONS</span>
-          <span><b>►</b> SNAPSHOT_LOTHAL_03.JSON SAVED</span>
-          <span>DRAFTED IN AHMEDABAD</span>
-          <span>BUILD 0.4.1 — STABLE</span>
-          <span><b>● LIVE</b> &nbsp; YOLO-V8 DETECTION ACTIVE &nbsp; / &nbsp; 6 OBJECTS TRACKED</span>
-          <span>FRAMERATE 28 FPS</span>
-          <span>ZONING COMPLIANCE — 2 VIOLATIONS</span>
-          <span><b>►</b> SNAPSHOT_LOTHAL_03.JSON SAVED</span>
-          <span>DRAFTED IN AHMEDABAD</span>
-          <span>BUILD 0.4.1 — STABLE</span>
+      {/* ── LOADER ───────────────────────────────────────────────────────── */}
+      {!isLoaded && (
+        <div style={{
+          position: "fixed", inset: 0, backgroundColor: "#050505", zIndex: 1000,
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          gap: 20, opacity: fadingOut ? 0 : 1, transition: "opacity 0.7s ease",
+          pointerEvents: fadingOut ? "none" : "auto",
+        }}>
+          <div style={{ textAlign: "center", marginBottom: 8 }}>
+            <div style={{ color: "rgba(200,169,110,0.5)", fontSize: 10, letterSpacing: "0.3em", textTransform: "uppercase", fontFamily: "'DM Mono', monospace", marginBottom: 12 }}>
+              Urban Canvas
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 22, letterSpacing: "0.05em", fontWeight: 300 }}>
+              Preparing your canvas
+            </div>
+          </div>
+          {/* thin bar */}
+          <div style={{ width: 180, height: 1, background: "rgba(255,255,255,0.08)", position: "relative", overflow: "hidden" }}>
+            <div style={{
+              position: "absolute", top: 0, left: 0, height: "100%",
+              width: `${loadPct}%`, background: "linear-gradient(90deg,#C8A96E,#00D6FF)",
+              boxShadow: "0 0 10px #C8A96E", transition: "width 0.3s",
+            }} />
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "'DM Mono', monospace", letterSpacing: "0.2em" }}>
+            {loadPct}%
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* ── Nav ── */}
-      <nav className="nav">
-        <Link href="/" className="nav-logo">
-          plan.vision <span className="stamp">REV-04</span>
-        </Link>
-        <div className="nav-mid">
-          <a href="#process">01 / Process</a>
-          <a href="#evaluation">02 / Evaluation</a>
-          <a href="#workflow">03 / Workflow</a>
-          <a href="#stack">04 / Stack</a>
+      {/* ── NAVBAR ───────────────────────────────────────────────────────── */}
+      <nav
+        ref={navRef}
+        style={{
+          position: "fixed", top: 0, left: 0, right: 0, height: 48, zIndex: 500,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "0 32px",
+          background: "rgba(5,5,5,0.82)", backdropFilter: "blur(16px)",
+          borderBottom: "1px solid rgba(255,255,255,0.05)",
+          opacity: 0, transform: "translateY(-6px)",
+          transition: "opacity 0.5s ease, transform 0.5s ease",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.2em", color: "rgba(255,255,255,0.9)", fontFamily: "'DM Mono', monospace" }}>URBAN</span>
+          <span style={{ width: 1, height: 14, background: "rgba(255,255,255,0.15)", display: "block" }} />
+          <span style={{ fontSize: 10, letterSpacing: "0.15em", color: "rgba(200,169,110,0.7)", fontFamily: "'DM Mono', monospace" }}>CANVAS</span>
         </div>
-        <div className="nav-right">
-          <span className="nav-clock"><span className="dot" />SESSION {time}</span>
-          <Link href="/dashboard" className="btn btn-ink">
-            Launch <span className="arrow">→</span>
-          </Link>
+        <div style={{ display: "flex", gap: 28, alignItems: "center" }}>
+          {["Place", "Score", "Compete", "Gallery"].map(t => (
+            <a key={t} style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: "0.15em", textDecoration: "none", cursor: "pointer", fontFamily: "'DM Mono', monospace", transition: "color 0.2s" }}
+              onMouseEnter={e => (e.currentTarget.style.color = "rgba(255,255,255,0.9)")}
+              onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.45)")}
+            >{t.toUpperCase()}</a>
+          ))}
         </div>
+        <button
+          onClick={() => router.push("/dashboard")}
+          style={{
+            background: "transparent",
+            border: "1px solid rgba(200,169,110,0.35)",
+            padding: "8px 20px",
+            fontSize: 9,
+            letterSpacing: "0.2em",
+            color: "rgba(200,169,110,0.85)",
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer !important",
+            transition: "all 0.3s ease",
+            outline: "none",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(200,169,110,0.12)"; e.currentTarget.style.borderColor = "rgba(200,169,110,0.7)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(200,169,110,0.35)"; }}
+        >
+          START BUILDING ↗
+        </button>
       </nav>
 
-      {/* ─────────────────── HERO ─────────────────── */}
-      <section className="hero" ref={heroRef}>
-        <div className="hero-left">
-          <div className="doc-meta">
-            <div>Sheet <b>A-01 / 06</b></div>
-            <div>Drawn by <b>Computer Vision</b></div>
-            <div>Scale <b>1 : LIVE</b></div>
-            <div>Date <b>{new Date().getFullYear()}</b></div>
-          </div>
+      {/* ── SCROLL PROGRESS BAR ──────────────────────────────────────────── */}
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 1, background: "rgba(255,255,255,0.05)", zIndex: 400 }}>
+        <div ref={progressBarRef} style={{ height: "100%", width: "0%", background: "linear-gradient(90deg,#C8A96E,#00D6FF)", transition: "width 0.05s" }} />
+      </div>
 
-          <div className="eyebrow">CV-Based Spatial Planning · Evaluator</div>
+      {/* ── STICKY STAGE ─────────────────────────────────────────────────── */}
+      <div style={{
+        position: "sticky", top: 0, height: "100vh", width: "100%", overflow: "hidden",
+        perspective: "1600px",
+      }}>
+        {/* Three.js Background WebGL Canvas */}
+        <canvas
+          ref={threeCanvasRef}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 1,
+            pointerEvents: "none",
+          }}
+        />
 
-          <h1 className="h1">
-            Stop drawing cities.<br />
-            <span className="serif">Start </span>
-            <span className="underline">building</span> them<br />
-            with your hands.
-          </h1>
+        {/* Ambient radial glow — gold for cathedral phase */}
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none",
+          background: "radial-gradient(ellipse 60% 50% at 25% 40%, rgba(200,169,110,0.06) 0%, transparent 70%)",
+        }} />
+        {/* Ambient radial glow — cyan for city phase */}
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none",
+          background: "radial-gradient(ellipse 60% 50% at 75% 60%, rgba(0,214,255,0.05) 0%, transparent 70%)",
+        }} />
 
-          <p className="lede">
-            Place physical blocks on any flat surface. A webcam watches.
-            Within milliseconds, <b>plan.vision</b> identifies each building
-            by colour and form, draws the zoning graph, runs traffic flow,
-            measures utility coverage, and tells you — with a number —
-            whether your town actually works.
-          </p>
-
-          <div className="hero-cta">
-            <Link href="/dashboard" className="btn btn-ink">
-              Launch Dashboard <span className="arrow">→</span>
-            </Link>
-            <a href="#process" className="btn btn-ghost">
-              Read the spec
-            </a>
-          </div>
-
-          <div className="key-stats">
-            <div>
-              <div className="num">6</div>
-              <div className="lbl">Block<br/>classes</div>
-            </div>
-            <div>
-              <div className="num">28<span style={{fontSize:'0.9rem'}}>fps</span></div>
-              <div className="lbl">Live<br/>detection</div>
-            </div>
-            <div>
-              <div className="num">4</div>
-              <div className="lbl">Scoring<br/>axes</div>
-            </div>
-            <div>
-              <div className="num">{composite}</div>
-              <div className="lbl">Current<br/>composite</div>
-            </div>
-          </div>
-
-          <div className="margin-note">
-            “The room is the canvas.
-            The camera is the pencil.” <br />
-            <span style={{ opacity: 0.7, fontSize: "0.85rem" }}>— field note, sheet 02</span>
-          </div>
+        {/* ── CATHEDRAL CANVAS WRAPPER ─────────────────────────────────── */}
+        <div
+          ref={catWrapRef}
+          style={{
+            position: "absolute",
+            top: "6vh", left: "3vw",
+            width: "38vw", height: "52vh",
+            willChange: "transform, opacity",
+            transformOrigin: "center center",
+            transition: "opacity 0.3s ease",
+            zIndex: 10,
+          }}
+        >
+          <canvas
+            ref={catCanvasRef}
+            style={{ display: "block", width: "100%", height: "100%", borderRadius: 2 }}
+          />
+          {/* subtle gold frame edge */}
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: 2,
+            border: "1px solid rgba(200,169,110,0.15)",
+            pointerEvents: "none",
+          }} />
         </div>
 
-        {/* RIGHT: Live detection viewport */}
-        <div className="viewport-wrap" data-rise>
-          <div className="viewport">
-            <div className="viewport-grid" />
-            <div className="viewport-noise" />
-            <div
-              className="viewport-scan"
-              style={{ top: `${scanLine}%`, transform: "translateY(-50%)" }}
-            />
-            <div className="vc-tl viewport-corner" />
-            <div className="vc-tr viewport-corner" />
-            <div className="vc-bl viewport-corner" />
-            <div className="vc-br viewport-corner" />
-
-            <div className="viewport-bar">
-              <span className="rec">REC · CAM_01</span>
-              <span>1920 × 1080 · YOLOv8s</span>
-              <span>{time}</span>
-            </div>
-
-            {/* Detected objects */}
-            {SEED_BLOCKS.map((b) => (
-              <div
-                key={b.id}
-                className={`det ${activeBlock === b.id ? "is-active" : ""}`}
-                style={
-                  {
-                    left: `${b.x}%`,
-                    top: `${b.y}%`,
-                    width: `${b.w}px`,
-                    height: `${b.h}px`,
-                    ["--accent-color" as any]: b.color,
-                  } as React.CSSProperties
-                }
-              >
-                <div className="det-box" />
-                <div className="det-tag">
-                  {b.code} · {b.label} · {(b.conf * 100).toFixed(0)}%
-                </div>
-                <div className="det-id">{b.id}</div>
-              </div>
-            ))}
-
-            {/* Live coords */}
-            <div className="viewport-footer">
-              <span>X {coords.x.toFixed(1)} · Y {coords.y.toFixed(1)}</span>
-              <span><span className="ok">●</span> 6 objects</span>
-              <span><span className="warn">▲</span> 2 violations</span>
-            </div>
-          </div>
-
-          {/* Score readout */}
-          <div className="readout" data-rise>
-            <h4>
-              <span>Live Evaluation</span>
-              <span className="grade">{gradeLetter(composite)}</span>
-            </h4>
-            <ReadoutRow label="Zoning"   v={score.zoning} />
-            <ReadoutRow label="Coverage" v={score.coverage} />
-            <ReadoutRow label="Connect."   v={score.connect} />
-            <ReadoutRow label="Density"  v={score.density} />
-            <div className="readout-total">
-              <span className="lbl">Composite</span>
-              <span className="num">{composite}<span style={{fontSize:'0.9rem'}}>/100</span></span>
-            </div>
-          </div>
+        {/* ── CITY CANVAS WRAPPER ──────────────────────────────────────── */}
+        <div
+          ref={cityWrapRef}
+          style={{
+            position: "absolute",
+            bottom: "6vh", right: "3vw",
+            width: "38vw", height: "52vh",
+            opacity: 0,
+            willChange: "transform, opacity",
+            transformOrigin: "center center",
+            transition: "opacity 0.3s ease",
+            zIndex: 10,
+          }}
+        >
+          <canvas
+            ref={cityCanvasRef}
+            style={{ display: "block", width: "100%", height: "100%", borderRadius: 2 }}
+          />
+          {/* subtle cyan frame edge */}
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: 2,
+            border: "1px solid rgba(0,214,255,0.12)",
+            pointerEvents: "none",
+          }} />
         </div>
-      </section>
 
-      {/* ─────────────────── PROCESS / 01 ─────────────────── */}
-      <section id="process">
-        <div className="container">
-          <div className="section-head">
-            <div data-rise>
-              <div className="sec-num">§ 01 — The process</div>
-              <h2 className="sec-h">
-                Three<br/>
-                <span className="serif">moves.</span>
-              </h2>
+        {/* ── BEAT TEXT OVERLAYS ───────────────────────────────────────── */}
+        {BEATS.map((beat, i) => (
+          <div
+            key={i}
+            ref={el => { beatRefs.current[i] = el; }}
+            style={{
+              position: "absolute",
+              top: "50%", transform: "translateY(0px)",
+              ...(beat.align === "left"   ? { left: "48vw", right: "3vw", textAlign: "left"  } : {}),
+              ...(beat.align === "right"  ? { right: "48vw", left: "3vw", textAlign: "right" } : {}),
+              ...(beat.align === "center" ? { left: "50%",  transform: "translateX(-50%)", textAlign: "center", width: "min(560px, 80vw)" } : {}),
+              marginTop: beat.align === "center" ? "-120px" : "-100px",
+              opacity: 0,
+              pointerEvents: "none",
+              zIndex: 200,
+              willChange: "opacity, transform",
+            }}
+          >
+            {/* tag line */}
+            <div style={{
+              fontSize: 9, letterSpacing: "0.3em", textTransform: "uppercase",
+              color: beat.accent, marginBottom: 14, fontFamily: "'DM Mono', monospace",
+              opacity: 0.85,
+            }}>
+              {beat.tag}
             </div>
-            <p className="sec-lede" data-rise>
-              No CAD seat. No mouse drag. The whole workflow is short enough
-              to fit on a single sheet — because that&apos;s the point. Build
-              with your hands, evaluate with the machine, iterate in seconds.
+            {/* headline */}
+            <h2 style={{
+              fontSize: "clamp(28px, 4.5vw, 64px)",
+              fontWeight: 600,
+              lineHeight: 1.05,
+              color: "rgba(255,255,255,0.92)",
+              marginBottom: 20,
+              letterSpacing: "-0.01em",
+              whiteSpace: "pre-line",
+              fontFamily: "'Cormorant Garamond', Georgia, serif",
+            }}>
+              {beat.headline}
+            </h2>
+            {/* body */}
+            <p style={{
+              fontSize: "clamp(13px, 1.3vw, 17px)",
+              lineHeight: 1.7,
+              color: "rgba(255,255,255,0.5)",
+              maxWidth: 420,
+              ...(beat.align === "center" ? { margin: "0 auto" } : {}),
+              fontFamily: "'Cormorant Garamond', Georgia, serif",
+              fontWeight: 300,
+            }}>
+              {beat.body}
             </p>
+            {beat.sub && (
+              <p style={{
+                marginTop: 14,
+                fontSize: "clamp(10px, 1vw, 13px)",
+                color: beat.accent,
+                opacity: 0.6,
+                letterSpacing: "0.08em",
+                fontFamily: "'DM Mono', monospace",
+                fontWeight: 300,
+              }}>
+                — {beat.sub}
+              </p>
+            )}
+            {/* CTA only on last beat */}
+            {i === BEATS.length - 1 && (
+              <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 32, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => router.push("/dashboard")}
+                  style={{
+                    padding: "12px 28px",
+                    background: "transparent",
+                    border: "1px solid rgba(200,169,110,0.6)",
+                    color: "rgba(200,169,110,0.9)",
+                    fontSize: 10, letterSpacing: "0.2em",
+                    fontFamily: "'DM Mono', monospace",
+                    cursor: "pointer !important",
+                    transition: "all 0.3s",
+                    outline: "none",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(200,169,110,0.12)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  START DESIGNING
+                </button>
+                <button
+                  onClick={() => router.push("/dashboard")}
+                  style={{
+                    padding: "12px 28px",
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    color: "rgba(255,255,255,0.4)",
+                    fontSize: 10, letterSpacing: "0.2em",
+                    fontFamily: "'DM Mono', monospace",
+                    cursor: "pointer !important",
+                    transition: "all 0.3s",
+                    outline: "none",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)"; e.currentTarget.style.color = "rgba(255,255,255,0.7)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "rgba(255,255,255,0.4)"; }}
+                >
+                  VIEW LEADERBOARD
+                </button>
+              </div>
+            )}
           </div>
+        ))}
 
-          <div className="steps">
-            <div className="step" data-rise>
-              <div className="step-tag">↳ Physical</div>
-              <div className="step-num">i.</div>
-              <h3 className="step-h">Lay out the blocks</h3>
-              <p className="step-p">
-                Coloured cubes and tagged cards on a table. Green is residential,
-                blue is utility, orange is warehouse, red is industry, grey is road.
-                Rearrange as freely as a chessboard.
-              </p>
-            </div>
-            <div className="step" data-rise>
-              <div className="step-tag">↳ Vision</div>
-              <div className="step-num">ii.</div>
-              <h3 className="step-h">Let the camera see</h3>
-              <p className="step-p">
-                A custom YOLOv8 model — trained on your block set — locks onto
-                every object in the frame. Position, class, confidence and a
-                stable ID land in the dashboard at 28 fps.
-              </p>
-            </div>
-            <div className="step" data-rise>
-              <div className="step-tag">↳ Verdict</div>
-              <div className="step-num">iii.</div>
-              <h3 className="step-h">Read the score</h3>
-              <p className="step-p">
-                The engine runs four planning checks against the live frame and
-                returns a composite grade. Slide a block one inch — the grade
-                changes before your hand is back on the table.
-              </p>
-            </div>
-          </div>
+        {/* ── DIVIDER LINE (cathedral → city) ──────────────────────────── */}
+        <div style={{
+          position: "absolute", top: "50%", left: "50%",
+          transform: "translate(-50%,-50%)",
+          width: 1, height: "40vh",
+          background: "linear-gradient(to bottom, transparent, rgba(200,169,110,0.3), rgba(0,214,255,0.3), transparent)",
+          pointerEvents: "none", zIndex: 10,
+        }} />
+
+        {/* ── SCROLL HINT (visible at start) ───────────────────────────── */}
+        <div style={{
+          position: "absolute", bottom: "5vh", left: "50%",
+          transform: "translateX(-50%)",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+          zIndex: 200, pointerEvents: "none",
+        }}>
+          <span style={{ fontSize: 8, letterSpacing: "0.25em", color: "rgba(255,255,255,0.2)", fontFamily: "'DM Mono', monospace" }}>SCROLL</span>
+          <div style={{
+            width: 1, height: 32,
+            background: "linear-gradient(to bottom, rgba(200,169,110,0.5), transparent)",
+            animation: "scrollPulse 1.8s ease-in-out infinite",
+          }} />
         </div>
-      </section>
 
-      {/* ─────────────────── EVALUATION / 02 ─────────────────── */}
-      <section id="evaluation">
-        <div className="container">
-          <div className="section-head">
-            <div data-rise>
-              <div className="sec-num">§ 02 — What it actually checks</div>
-              <h2 className="sec-h">
-                Four <span className="serif">axes</span>,<br/>
-                one verdict.
-              </h2>
-            </div>
-            <p className="sec-lede" data-rise>
-              Every layout is graded on four independent dimensions —
-              the same ones a town planner argues about over coffee, except
-              now the argument settles in under a second.
-            </p>
-          </div>
-
-          <div className="caps">
-            {/* Card 1 — Zoning (wide) */}
-            <div className="cap cap-1" data-rise>
-              <div className="cap-head">
-                <span className="cap-id">AXIS · 01 / ZC</span>
-                <span className="cap-badge">Hard rule</span>
-              </div>
-              <h3 className="cap-h">Zoning compliance.</h3>
-              <p className="cap-p">
-                A warehouse one metre from a house is not a town — it&apos;s a
-                lawsuit. The compatibility matrix flags every adjacency
-                that breaks zoning, with the exact buffer it&apos;d need to
-                stop being a violation.
-              </p>
-              <div className="cap-vis">
-                <span className="x">RES ↔ IND too close · need +4m</span>
-                <span className="ok">RES ↔ UTL OK</span>
-                <span className="ok">IND ↔ INF OK</span>
-              </div>
-            </div>
-
-            {/* Card 2 — Coverage (dark) */}
-            <div className="cap cap-2" data-rise>
-              <div className="cap-head">
-                <span className="cap-id">AXIS · 02 / CA</span>
-                <span className="cap-badge">Service radius</span>
-              </div>
-              <h3 className="cap-h">Utility coverage.</h3>
-              <p className="cap-p">
-                Each reservoir casts a service radius. A residential block
-                outside every radius is a household with no water. The map
-                flags it and suggests where one new utility would fix the most.
-              </p>
-              <div className="ring" style={{ ["--p" as any]: 88 } as React.CSSProperties}>
-                <div>88<span style={{fontSize:'0.9rem', verticalAlign:'top'}}>%</span></div>
-              </div>
-            </div>
-
-            {/* Card 3 — Connectivity (narrow) */}
-            <div className="cap cap-3" data-rise>
-              <div className="cap-head">
-                <span className="cap-id">AXIS · 03 / CG</span>
-                <span className="cap-badge">Graph</span>
-              </div>
-              <h3 className="cap-h">Connectivity graph.</h3>
-              <p className="cap-p">
-                Buildings become nodes, roads become edges. Disconnected
-                clusters are surfaced immediately — drop a loading platform
-                to bridge them or watch your score drop.
-              </p>
-            </div>
-
-            {/* Card 4 — Density (wide) */}
-            <div className="cap cap-4" data-rise>
-              <div className="cap-head">
-                <span className="cap-id">AXIS · 04 / DB</span>
-                <span className="cap-badge">Distribution</span>
-              </div>
-              <h3 className="cap-h">Density balance.</h3>
-              <p className="cap-p">
-                The board is split into quadrants and weighed against itself.
-                Pile everything into one corner and the score tells you so.
-                A balanced plan reads like a well-set table.
-              </p>
-              <div className="cap-vis">
-                <span>NW · 4 blocks</span>
-                <span>NE · 2 blocks</span>
-                <span>SW · 1 block</span>
-                <span>SE · 3 blocks</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────── WORKFLOW / 03 ─────────────────── */}
-      <section id="workflow" className="strip">
-        <div className="strip-inner">
-          <div data-rise>
-            <div className="sec-num">§ 03 — Save · Replay · Compare</div>
-            <h3>
-              Every plan you<br/>like, <span className="serif">kept.</span>
-            </h3>
-            <p>
-              A keystroke captures the current frame — every object,
-              every score, every violation, frozen as a JSON snapshot.
-              Load any two later and the dashboard puts them side by
-              side on the same rubric. Argue with the numbers, not your
-              colleague.
-            </p>
-            <div className="keycaps">
-              press
-              <span className="kbd">S</span>
-              to snapshot ·
-              <span className="kbd">C</span>
-              to compare ·
-              <span className="kbd">R</span>
-              to replay
-            </div>
-          </div>
-          <div data-rise>
-            <div className="compare">
-              <div className="compare-head">
-                <span>Axis</span>
-                <span>Plan A</span>
-                <span>›</span>
-                <span>Plan B</span>
-                <span>Δ</span>
-              </div>
-              <CompareRow label="Zoning"    a={68} b={84} />
-              <CompareRow label="Coverage"  a={91} b={88} />
-              <CompareRow label="Connect."  a={55} b={79} />
-              <CompareRow label="Density"   a={72} b={81} />
-              <CompareRow label="Composite" a={72} b={83} strong />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────── STACK / 04 ─────────────────── */}
-      <section id="stack">
-        <div className="container">
-          <div className="section-head">
-            <div data-rise>
-              <div className="sec-num">§ 04 — The toolchain</div>
-              <h2 className="sec-h">
-                What&apos;s under<br/>the <span className="serif">hood.</span>
-              </h2>
-            </div>
-            <p className="sec-lede" data-rise>
-              A boring stack is a feature. Vision is owned by YOLO and OpenCV.
-              The API is a thin Flask layer. Everything you click sits on
-              Next.js, React 19, and TypeScript — so it stays fast and stays
-              honest.
-            </p>
-          </div>
-
-          <div className="stack-list" data-rise>
-            <StackRow idx="01" name="YOLOv8" role="Object Detection" ver="ultralytics 8.x" />
-            <StackRow idx="02" name="OpenCV" role="Frame Processing" ver="cv2 4.10" />
-            <StackRow idx="03" name="Python" role="Vision Pipeline"  ver="3.11" />
-            <StackRow idx="04" name="Flask"  role="HTTP API"          ver="3.0" />
-            <StackRow idx="05" name="Next.js" role="App Shell"        ver="16.0" />
-            <StackRow idx="06" name="React"   role="UI Runtime"       ver="19.0" />
-            <StackRow idx="07" name="TypeScript" role="Types & DX"    ver="5.x" />
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────── CTA ─────────────────── */}
-      <section className="cta">
-        <div className="cta-inner">
-          <h2 data-rise>
-            Plug in the camera.<br/>
-            Lay out a town.<br/>
-            <span className="serif">See if it works.</span>
-          </h2>
-          <div data-rise>
-            <p>
-              The Python backend boots in one command. The dashboard&apos;s a
-              second. After that, the next move is yours — and so is the
-              first block.
-            </p>
-            <Link href="/dashboard" className="btn btn-ink" style={{ fontSize: "0.85rem", padding: "1rem 1.6rem" }}>
-              Launch the dashboard <span className="arrow">→</span>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────── FOOT ─────────────────── */}
-      <footer className="foot">
-        <div className="rule" />
-        <div className="foot-inner">
-          <div className="left">plan.vision</div>
-          <div className="mid">Drafted in the spirit of Lothal · Ahmedabad</div>
-          <div className="right">© {new Date().getFullYear()} · all sheets reserved</div>
-        </div>
-      </footer>
+        <style>{`
+          @keyframes scrollPulse {
+            0%,100% { opacity: 0.3; transform: scaleY(1); }
+            50% { opacity: 1; transform: scaleY(1.2); }
+          }
+        `}</style>
+      </div>
     </div>
   );
-}
-
-/* ──────────────────────────────────────────────────────────────────────── */
-/*                                helpers                                   */
-/* ──────────────────────────────────────────────────────────────────────── */
-
-function ReadoutRow({ label, v }: { label: string; v: number }) {
-  return (
-    <div className="readout-row">
-      <span>{label}</span>
-      <span className="bar"><span style={{ width: `${v}%` }} /></span>
-      <span className="val">{v}</span>
-    </div>
-  );
-}
-
-function CompareRow({ label, a, b, strong = false }: { label: string; a: number; b: number; strong?: boolean }) {
-  const delta = b - a;
-  return (
-    <div className="compare-row" style={strong ? { borderTop: "1px solid rgba(236,234,216,0.25)", marginTop: 6, paddingTop: 12, fontWeight: 700 } : undefined}>
-      <span className="label">{label}</span>
-      <span className="bar"><span style={{ width: `${a}%` }} /></span>
-      <span className="v">{a}</span>
-      <span className="bar alt"><span style={{ width: `${b}%` }} /></span>
-      <span className="v" style={{ color: delta >= 0 ? "#86efac" : "#fca5a5" }}>
-        {delta >= 0 ? "+" : ""}{delta}
-      </span>
-    </div>
-  );
-}
-
-function StackRow({ idx, name, role, ver }: { idx: string; name: string; role: string; ver: string }) {
-  return (
-    <div className="stack-row">
-      <span className="idx">{idx}</span>
-      <span className="name">{name}</span>
-      <span className="role">{role}</span>
-      <span className="ver">{ver}</span>
-    </div>
-  );
-}
-
-function gradeLetter(n: number) {
-  if (n >= 90) return "A";
-  if (n >= 80) return "B+";
-  if (n >= 70) return "B";
-  if (n >= 60) return "C";
-  return "D";
-}
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-function rand(min: number, max: number) {
-  return Math.round(Math.random() * (max - min) + min);
 }

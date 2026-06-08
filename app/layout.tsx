@@ -1,28 +1,32 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Cormorant_Garamond, Space_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const cormorant = Cormorant_Garamond({
+  variable: "--font-display",
   subsets: ["latin"],
+  weight: ["300", "400", "500"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const spaceMono = Space_Mono({
+  variable: "--font-mono",
   subsets: ["latin"],
+  weight: ["400", "700"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "PlanVision — Urban Planning AR System",
+  title: "Architecture as Argument",
   description:
-    "Real-time urban planning evaluation system. Arrange physical blocks on a surface, detect them via webcam, and run instant zoning, coverage, connectivity, and density analysis.",
+    "Structural intelligence. Spatial consequence. An editorial exploration of architecture, sacred geometry, and urban systems.",
   keywords: [
+    "architecture",
     "urban planning",
-    "augmented reality",
-    "YOLO",
-    "object detection",
-    "town planning",
-    "zoning analysis",
+    "sacred geometry",
+    "structural systems",
+    "spatial programming",
+    "heritage restoration",
   ],
 };
 
@@ -32,11 +36,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={`${cormorant.variable} ${spaceMono.variable}`}>
+      <body>{children}</body>
     </html>
   );
 }
