@@ -28,7 +28,7 @@ const BEATS: Beat[] = [
     align: "center",
     tag: "URBAN CANVAS",
     headline: "Design the city\nyou imagine.",
-    body: "A challenge platform for architects and visionaries. Place buildings, parks, roads, and landmarks — then let the algorithm judge your city.",
+    body: "Place buildings, parks, and roads — then let the algorithm grade your vision.",
     accent: "#C8A96E",
   },
   {
@@ -36,8 +36,7 @@ const BEATS: Beat[] = [
     align: "left",
     tag: "PLACE & PLAN",
     headline: "Every block\na decision.",
-    body: "Drag and drop zoning models onto the canvas. Residential towers, green corridors, commercial hubs — every placement shifts your score in real time.",
-    sub: "Zoning logic meets creative intuition.",
+    body: "Drag zoning models onto the canvas. Every placement shifts your score in real time.",
     accent: "#C8A96E",
   },
   {
@@ -45,27 +44,26 @@ const BEATS: Beat[] = [
     align: "right",
     tag: "THE SCORE",
     headline: "Your city,\ngraded.",
-    body: "An intelligent scoring engine evaluates density, walkability, green space, and flow. Every layout earns a grade — from D to S tier.",
-    sub: "From concept sketch to scored masterplan.",
+    body: "Density, walkability, green space, flow — every layout earns a grade from D to S.",
     accent: "#00D6FF",
   },
   {
     start: 0.62, fadeIn: 0.67, fadeOut: 0.78, end: 0.84,
     align: "left",
-    tag: "COMPETE & COMPARE",
+    tag: "COMPETE",
     headline: "Beat the\nleaderboard.",
-    body: "Submit your design to the global challenge. Architects, students, and urban dreamers compete on the same canvas. Only the best plans rise to the top.",
-    sub: "100+ active challenges. New maps every week.",
+    body: "Architects, students, and dreamers — all on the same canvas.",
+    sub: "100+ active challenges. New maps weekly.",
     accent: "#00D6FF",
   },
   {
-    start: 0.84, fadeIn: 0.88, fadeOut: 0.97, end: 1.0,
-    align: "center",
-    tag: "YOUR BLUEPRINT",
-    headline: "Draw it.\nScore it.\nOwn it.",
-    body: "Whether you are a seasoned architect or a first-time planner, the canvas is yours. Start building — the city is waiting for your vision.",
-    accent: "#C8A96E",
-  },
+  start: 0.84, fadeIn: 0.88, fadeOut: 1.5, end: 2.0,
+  align: "center",
+  tag: "YOUR BLUEPRINT",
+  headline: "Draw it.\nScore it.\nOwn it.",
+  body: "The canvas is yours. Start building — the city is waiting.",
+  accent: "#C8A96E",
+},
 ];
 
 // ─── component ──────────────────────────────────────────────────────────────
@@ -160,9 +158,10 @@ export default function SacredCityPage() {
     });
     if (catCanvasRef.current)  { sync(catCanvasRef.current);  ro.observe(catCanvasRef.current); }
     if (cityCanvasRef.current) { sync(cityCanvasRef.current); ro.observe(cityCanvasRef.current); }
+    return () => ro.disconnect();
   }, [isLoaded]);
 
-  // ── Three.js dynamic background ───────────────────────────────────────────
+  // ── Three.js refined "Apple-like" background ──────────────────────────────
   useEffect(() => {
     if (!isLoaded || !threeCanvasRef.current) return;
 
@@ -172,120 +171,118 @@ export default function SacredCityPage() {
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
 
     const scene = new THREE.Scene();
+    // soft depth falloff — the secret to a calm, premium feel
+    scene.fog = new THREE.FogExp2(0x050505, 0.018);
 
-    // Camera setup
-    const camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 100);
-    camera.position.set(0, 10, 24);
-    camera.lookAt(0, 0, 0);
+    // Camera
+    const camera = new THREE.PerspectiveCamera(38, canvas.clientWidth / canvas.clientHeight, 0.1, 200);
+    camera.position.set(0, 4, 34);
+    camera.lookAt(0, 2, 0);
 
-    // Light setups
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.08);
-    scene.add(ambientLight);
+    // ── gentle lighting (one warm key, one cool fill — never fighting) ──
+    const ambient = new THREE.AmbientLight(0xffffff, 0.25);
+    scene.add(ambient);
 
-    // Gold light (Cathedral Phase)
-    const goldLight = new THREE.PointLight(0xC8A96E, 8, 45);
-    goldLight.position.set(-12, 6, 8);
-    scene.add(goldLight);
+    const keyLight = new THREE.DirectionalLight(0xC8A96E, 1.1);
+    keyLight.position.set(-8, 12, 10);
+    scene.add(keyLight);
 
-    // Cyan light (City Phase)
-    const cyanLight = new THREE.PointLight(0x00D6FF, 8, 45);
-    cyanLight.position.set(12, -4, 8);
-    scene.add(cyanLight);
+    const fillLight = new THREE.DirectionalLight(0x00D6FF, 0.6);
+    fillLight.position.set(10, -2, 6);
+    scene.add(fillLight);
 
-    // Wavy Blueprint Grid Geometry
-    const gridGeometry = new THREE.PlaneGeometry(70, 70, 48, 48);
-    const gridMaterial = new THREE.MeshBasicMaterial({
-      color: 0x444444,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.1,
-    });
-    const grid = new THREE.Mesh(gridGeometry, gridMaterial);
-    grid.rotation.x = -Math.PI / 2;
-    scene.add(grid);
+    // ── a single, calm cluster of clean wireframe structures ──
+    const structures = new THREE.Group();
+    const STRUCT_COUNT = 9;
+    const structData: {
+      mesh: THREE.Group;
+      baseY: number;
+      driftPhase: number;
+      driftAmp: number;
+      rotSpeed: number;
+    }[] = [];
 
-    // Floating Glassmorphic/Wireframe Blocks (Architectural models)
-    const blocksGroup = new THREE.Group();
-    const blocksCount = 16;
-    const blockData: { mesh: THREE.Mesh; initialY: number; speed: number; rotSpeed: { x: number; y: number } }[] = [];
-
-    const glassMaterial = new THREE.MeshPhysicalMaterial({
+    const lineMat = new THREE.LineBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.06,
-      roughness: 0.15,
-      metalness: 0.1,
-      transmission: 0.75,
-      ior: 1.45,
-      side: THREE.DoubleSide,
-      depthWrite: false,
+      opacity: 0.16,
     });
 
-    const edgeMaterialGold = new THREE.LineBasicMaterial({
-      color: 0xC8A96E,
-      transparent: true,
-      opacity: 0.22,
-    });
+    // arrange in a loose ring so the composition reads as intentional, not random
+    for (let i = 0; i < STRUCT_COUNT; i++) {
+      const angle = (i / STRUCT_COUNT) * Math.PI * 2;
+      const radius = 11 + (i % 3) * 3.5;
 
-    const edgeMaterialCyan = new THREE.LineBasicMaterial({
-      color: 0x00D6FF,
-      transparent: true,
-      opacity: 0.22,
-    });
+      const w = 1.4 + (i % 3) * 0.5;
+      const h = 4 + (i % 4) * 2.2;
+      const d = 1.4 + ((i + 1) % 3) * 0.5;
 
-    for (let i = 0; i < blocksCount; i++) {
-      const w = Math.random() * 2 + 1;
-      const h = Math.random() * 5 + 2;
-      const d = Math.random() * 2 + 1;
-      const geometry = new THREE.BoxGeometry(w, h, d);
-      
-      const mesh = new THREE.Mesh(geometry, glassMaterial);
-      
-      // Wireframe outline for model architectural edges
-      const edges = new THREE.EdgesGeometry(geometry);
-      const edgeMat = Math.random() > 0.5 ? edgeMaterialGold : edgeMaterialCyan;
-      const line = new THREE.LineSegments(edges, edgeMat);
-      mesh.add(line);
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const edges = new THREE.EdgesGeometry(geo);
 
-      // Distribute randomly across the drafting grid
-      const x = (Math.random() - 0.5) * 40;
-      const initialY = -h / 2 - 3 - Math.random() * 6; // submerged under grid initially
-      const z = (Math.random() - 0.5) * 40;
-      mesh.position.set(x, initialY, z);
+      const group = new THREE.Group();
+      const line = new THREE.LineSegments(edges, lineMat);
+      group.add(line);
 
-      blocksGroup.add(mesh);
-      blockData.push({
-        mesh,
-        initialY,
-        speed: Math.random() * 0.4 + 0.6,
-        rotSpeed: {
-          x: (Math.random() - 0.5) * 0.003,
-          y: (Math.random() - 0.5) * 0.003,
-        }
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius - 6;
+      const baseY = -2 + (i % 4) * 0.8;
+      group.position.set(x, baseY, z);
+      group.rotation.y = angle;
+
+      structures.add(group);
+      structData.push({
+        mesh: group,
+        baseY,
+        driftPhase: i * 0.7,
+        driftAmp: 0.5 + (i % 3) * 0.25,
+        rotSpeed: 0.03 + (i % 3) * 0.015,
       });
-    }
-    scene.add(blocksGroup);
 
-    // Urban Data Particles
-    const particlesCount = 250;
-    const positions = new Float32Array(particlesCount * 3);
-    for (let i = 0; i < particlesCount * 3; i += 3) {
-      positions[i] = (Math.random() - 0.5) * 60;
-      positions[i + 1] = Math.random() * 35 - 10;
-      positions[i + 2] = (Math.random() - 0.5) * 60;
+      geo.dispose();
     }
-    const particlesGeometry = new THREE.BufferGeometry();
-    particlesGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const particlesMaterial = new THREE.PointsMaterial({
-      color: 0xffffff,
-      size: 0.06,
+    scene.add(structures);
+
+    // ── layered soft particle field (slow drifting "dust" for depth) ──
+    const makeField = (count: number, spread: number, size: number, opacity: number, color: number) => {
+      const pos = new Float32Array(count * 3);
+      for (let i = 0; i < count * 3; i += 3) {
+        pos[i]     = (Math.random() - 0.5) * spread;
+        pos[i + 1] = (Math.random() - 0.5) * spread * 0.6;
+        pos[i + 2] = (Math.random() - 0.5) * spread;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const m = new THREE.PointsMaterial({
+        color,
+        size,
+        transparent: true,
+        opacity,
+        sizeAttenuation: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const points = new THREE.Points(g, m);
+      scene.add(points);
+      return { g, m, points };
+    };
+
+    const fieldFar  = makeField(120, 90, 0.10, 0.18, 0xffffff);
+    const fieldNear = makeField(60, 50, 0.18, 0.30, 0xC8A96E);
+
+    // ── faint horizon line (subtle ground reference, no busy grid) ──
+    const groundGeo = new THREE.PlaneGeometry(200, 200, 1, 1);
+    const groundMat = new THREE.MeshBasicMaterial({
+      color: 0x0a0a0a,
       transparent: true,
-      opacity: 0.2,
+      opacity: 0.5,
     });
-    const particles = new THREE.Points(particlesGeometry, particlesMaterial);
-    scene.add(particles);
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -8;
+    scene.add(ground);
 
-    // Custom resize listener
+    // resize
     const handleResize = () => {
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
@@ -295,87 +292,69 @@ export default function SacredCityPage() {
     };
     window.addEventListener("resize", handleResize);
 
-    // Frame animation loop
+    // ── animation loop ──
     let animId: number;
-    let clock = new THREE.Clock();
+    const clock = new THREE.Clock();
 
     const animate = () => {
       animId = requestAnimationFrame(animate);
       const time = clock.getElapsedTime();
       const p = easedP.current;
 
-      // 1. Blueprint Grid waves distortion
-      const pos = gridGeometry.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i);
-        const y = pos.getY(i);
-        // Harmonic waves representing urban acoustic resonance
-        const z = Math.sin(x * 0.1 + time * 0.8) * Math.cos(y * 0.1 + time * 0.8) * 0.9;
-        pos.setZ(i, z);
-      }
-      pos.needsUpdate = true;
-
-      // 2. Animate architectural building placements
-      blockData.forEach((data) => {
-        data.mesh.rotation.y += data.rotSpeed.y;
-        data.mesh.rotation.x += data.rotSpeed.x;
-
-        // Rise from the grid as user scrolls deeper into the city canvas
-        const targetY = data.initialY + p * 20 * data.speed;
-        data.mesh.position.y = lerp(data.mesh.position.y, targetY, 0.04);
+      // structures: gentle synced drift + slow unison rotation (calm, not chaotic)
+      structData.forEach((s) => {
+        s.mesh.rotation.y += s.rotSpeed * 0.01;
+        const drift = Math.sin(time * 0.4 + s.driftPhase) * s.driftAmp;
+        // rise subtly as the user scrolls into the city phase
+        const target = s.baseY + drift + p * 5;
+        s.mesh.position.y = lerp(s.mesh.position.y, target, 0.03);
       });
+      // the whole cluster turns very slowly — like a slow camera orbit
+      structures.rotation.y = time * 0.015;
 
-      // 3. Update Camera placement with mouse parallax and scroll transition
-      const targetCamX = mouse.current.x * 4;
-      const targetCamY = 10 - mouse.current.y * 3 + p * 6;
-      const targetCamZ = 24 - p * 8; // move closer as city builds
-
-      camera.position.x = lerp(camera.position.x, targetCamX, 0.04);
-      camera.position.y = lerp(camera.position.y, targetCamY, 0.04);
-      camera.position.z = lerp(camera.position.z, targetCamZ, 0.04);
-      camera.lookAt(0, p * 4, 0);
-
-      // 4. Update lights behavior
-      goldLight.intensity = (1 - p) * 10 + 1.5;
-      cyanLight.intensity = p * 10 + 1.5;
-
-      // 5. Slowly move particles upwards
-      const particlePos = particlesGeometry.attributes.position.array as Float32Array;
-      for (let i = 1; i < particlesCount * 3; i += 3) {
-        particlePos[i] += 0.015;
-        if (particlePos[i] > 25) {
-          particlePos[i] = -10;
+      // particle drift (slow upward, with wrap)
+      const drift = (field: { g: THREE.BufferGeometry }, speed: number, top: number, bottom: number) => {
+        const arr = field.g.attributes.position.array as Float32Array;
+        for (let i = 1; i < arr.length; i += 3) {
+          arr[i] += speed;
+          if (arr[i] > top) arr[i] = bottom;
         }
-      }
-      particlesGeometry.attributes.position.needsUpdate = true;
+        field.g.attributes.position.needsUpdate = true;
+      };
+      drift(fieldFar, 0.004, 30, -30);
+      drift(fieldNear, 0.008, 18, -18);
+
+      // camera: soft mouse parallax + slow scroll dolly
+      const targetCamX = mouse.current.x * 3;
+      const targetCamY = 4 - mouse.current.y * 2 + p * 4;
+      const targetCamZ = 34 - p * 12;
+      camera.position.x = lerp(camera.position.x, targetCamX, 0.03);
+      camera.position.y = lerp(camera.position.y, targetCamY, 0.03);
+      camera.position.z = lerp(camera.position.z, targetCamZ, 0.03);
+      camera.lookAt(0, 2 + p * 3, 0);
+
+      // light crossfade: warm gold → cool cyan as the city is built
+      keyLight.intensity  = lerp(1.1, 0.45, p);
+      fillLight.intensity = lerp(0.4, 1.0, p);
 
       renderer.render(scene, camera);
     };
-
     animate();
 
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener("resize", handleResize);
 
-      // Resource Disposal
-      gridGeometry.dispose();
-      gridMaterial.dispose();
-      glassMaterial.dispose();
-      edgeMaterialGold.dispose();
-      edgeMaterialCyan.dispose();
-      particlesGeometry.dispose();
-      particlesMaterial.dispose();
-
-      blockData.forEach((data) => {
-        data.mesh.geometry.dispose();
-        data.mesh.children.forEach((child) => {
-          if (child instanceof THREE.LineSegments) {
-            child.geometry.dispose();
-          }
+      lineMat.dispose();
+      groundGeo.dispose();
+      groundMat.dispose();
+      fieldFar.g.dispose();  fieldFar.m.dispose();
+      fieldNear.g.dispose(); fieldNear.m.dispose();
+      structData.forEach((s) => {
+        s.mesh.children.forEach((child) => {
+          if (child instanceof THREE.LineSegments) child.geometry.dispose();
         });
       });
-
       renderer.dispose();
     };
   }, [isLoaded]);
@@ -459,6 +438,7 @@ export default function SacredCityPage() {
         const ty = op < 1 && p < b.fadeIn ? lerp(36, 0, (p - b.start) / (b.fadeIn - b.start)) : 0;
         el.style.opacity = String(op);
         el.style.transform = `translateY(${ty}px)`;
+        el.style.pointerEvents = op > 0.1 ? "auto" : "none";
       });
 
       id = requestAnimationFrame(loop);
@@ -594,12 +574,17 @@ export default function SacredCityPage() {
         {/* Ambient radial glow — gold for cathedral phase */}
         <div style={{
           position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none",
-          background: "radial-gradient(ellipse 60% 50% at 25% 40%, rgba(200,169,110,0.06) 0%, transparent 70%)",
+          background: "radial-gradient(ellipse 60% 50% at 25% 40%, rgba(200,169,110,0.05) 0%, transparent 70%)",
         }} />
         {/* Ambient radial glow — cyan for city phase */}
         <div style={{
           position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none",
-          background: "radial-gradient(ellipse 60% 50% at 75% 60%, rgba(0,214,255,0.05) 0%, transparent 70%)",
+          background: "radial-gradient(ellipse 60% 50% at 75% 60%, rgba(0,214,255,0.04) 0%, transparent 70%)",
+        }} />
+        {/* vignette for depth */}
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none",
+          background: "radial-gradient(ellipse 100% 100% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%)",
         }} />
 
         {/* ── CATHEDRAL CANVAS WRAPPER ─────────────────────────────────── */}
