@@ -2,164 +2,20 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-interface DetectedObject {
-  name: string;
-  center: number[];
-  box: number[];
-}
-
-interface Evaluation {
-  violations: Violation[];
-  coverage: CoverageResult;
-  connectivity: ConnectivityResult;
-  density: DensityResult;
-  overall: OverallScore;
-  suggestions: string[];
-}
-
-interface Violation {
-  building_a: string;
-  building_a_display: string;
-  building_b: string;
-  building_b_display: string;
-  zone_a: string;
-  zone_b: string;
-  distance_cm: number;
-  required_buffer_cm: number;
-  severity: "critical" | "warning";
-  message: string;
-}
-
-interface CoverageResult {
-  total_needing_coverage: number;
-  covered: number;
-  uncovered: string[];
-  coverage_pct: number;
-}
-
-interface ConnectivityResult {
-  total_buildings: number;
-  connected_components: number;
-  is_fully_connected: boolean;
-  connectivity_pct: number;
-}
-
-interface DensityResult {
-  quadrants: Record<string, number>;
-  balance_score: number;
-}
-
-interface OverallScore {
-  overall: number;
-  breakdown: {
-    zoning: number;
-    coverage: number;
-    connectivity: number;
-    density: number;
-  };
-  grade: string;
-}
-
-interface AppState {
-  objects: DetectedObject[];
-  evaluation: Evaluation | null;
-  frame_size: { width: number; height: number };
-  timestamp: number | null;
-  is_running: boolean;
-}
-
-interface RegistryBuilding {
-  display_name: string;
-  type: string;
-  zone: string;
-  color: string;
-  traffic_weight: number;
-  buffer_zone_cm: number;
-  coverage_radius_cm: number;
-}
-
-interface Snapshot {
-  filename: string;
-  name: string;
-  timestamp: string;
-  object_count: number;
-  overall_score: number;
-  grade: string;
-}
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
-const API_BASE = "http://localhost:5000";
-
-async function fetchState(): Promise<AppState | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/state`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-async function fetchRegistry(): Promise<Record<string, RegistryBuilding> | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/registry`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.buildings || null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchSnapshots(): Promise<Snapshot[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/snapshots`);
-    if (!res.ok) return [];
-    return await res.json();
-  } catch {
-    return [];
-  }
-}
-
-async function saveSnapshot(name?: string): Promise<string | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/snapshot`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.filename;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function scoreColor(value: number): string {
-  if (value >= 90) return "#1f7a3a";
-  if (value >= 75) return "#3f8d2c";
-  if (value >= 60) return "#b45309";
-  if (value >= 40) return "#c2410c";
-  return "#b91c1c";
-}
-
-function gradeLetter(n: number) {
-  if (n >= 90) return "A";
-  if (n >= 80) return "B+";
-  if (n >= 70) return "B";
-  if (n >= 60) return "C";
-  return "D";
-}
+import {
+  type DetectedObject,
+  type RegistryBuilding,
+  type Evaluation,
+  type AppState,
+  type Snapshot,
+  scoreColor,
+  gradeLetter,
+  fetchState,
+  fetchRegistry,
+  fetchSnapshots,
+  saveSnapshot,
+  API_BASE,
+} from "@/lib/scoring-engine";
 
 // ---------------------------------------------------------------------------
 // Shared blueprint stylesheet
@@ -691,7 +547,7 @@ function CompositeBlock({
 }: {
   overall: number;
   grade: string;
-  breakdown: { zoning: number; coverage: number; connectivity: number; density: number };
+  breakdown: Record<string, number>;
 }) {
   return (
     <div

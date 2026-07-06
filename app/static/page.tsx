@@ -1,139 +1,21 @@
-// app\static\page.tsx
+// app/static/page.tsx
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-interface DetectedObject {
-  name: string;
-  center: number[];
-  box: number[];
-}
-
-interface Evaluation {
-  violations: Violation[];
-  coverage: CoverageResult;
-  connectivity: ConnectivityResult;
-  density: DensityResult;
-  overall: OverallScore;
-  suggestions: string[];
-}
-
-interface Violation {
-  building_a: string;
-  building_a_display: string;
-  building_b: string;
-  building_b_display: string;
-  zone_a: string;
-  zone_b: string;
-  distance_cm: number;
-  required_buffer_cm: number;
-  severity: "critical" | "warning";
-  message: string;
-}
-
-interface CoverageResult {
-  total_needing_coverage: number;
-  covered: number;
-  uncovered: string[];
-  coverage_pct: number;
-}
-
-interface ConnectivityResult {
-  total_buildings: number;
-  connected_components: number;
-  is_fully_connected: boolean;
-  connectivity_pct: number;
-}
-
-interface DensityResult {
-  quadrants: Record<string, number>;
-  balance_score: number;
-}
-
-interface OverallScore {
-  overall: number;
-  breakdown: {
-    zoning: number;
-    coverage: number;
-    connectivity: number;
-    density: number;
-  };
-  grade: string;
-}
-
-interface AppState {
-  objects: DetectedObject[];
-  evaluation: Evaluation | null;
-  frame_size: { width: number; height: number };
-  timestamp: number | null;
-  is_running: boolean;
-}
-
-interface RegistryBuilding {
-  display_name: string;
-  type: string;
-  zone: string;
-  color: string;
-  traffic_weight: number;
-  buffer_zone_cm: number;
-  coverage_radius_cm: number;
-}
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
-const API_BASE = "http://localhost:5000";
-
-async function fetchRegistry(): Promise<Record<string, RegistryBuilding> | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/registry`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.buildings || null;
-  } catch {
-    return null;
-  }
-}
-
-async function detectImage(
-  file: File
-): Promise<(AppState & { annotated_image?: string }) | null> {
-  try {
-    const formData = new FormData();
-    formData.append("image", file);
-    const res = await fetch(`${API_BASE}/api/detect`, {
-      method: "POST",
-      body: formData,
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function scoreColor(value: number): string {
-  if (value >= 90) return "#1f7a3a";
-  if (value >= 75) return "#3f8d2c";
-  if (value >= 60) return "#b45309";
-  if (value >= 40) return "#c2410c";
-  return "#b91c1c";
-}
-
-function gradeLetter(n: number) {
-  if (n >= 90) return "A";
-  if (n >= 80) return "B+";
-  if (n >= 70) return "B";
-  if (n >= 60) return "C";
-  return "D";
-}
+import {
+  type DetectedObject,
+  type RegistryBuilding,
+  type Evaluation,
+  type AppState,
+  type AxisScore,
+  evaluateLayout,
+  scoreColor,
+  gradeLetter,
+  fetchRegistry,
+  detectImage,
+  API_BASE,
+} from "@/lib/scoring-engine";
 
 // ---------------------------------------------------------------------------
 // Shared blueprint stylesheet
@@ -328,34 +210,6 @@ function BlueprintStyles() {
       .ruled::after  { right: 0; }
 
       /* ── Common ── */
-      .doc-meta {
-        display: flex;
-        gap: 2rem;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.66rem;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--ink-soft);
-      }
-      .doc-meta div b {
-        display: block;
-        color: var(--ink);
-        font-weight: 700;
-        margin-top: 2px;
-      }
-      .eyebrow {
-        display: inline-flex; align-items: center; gap: 0.6rem;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.72rem;
-        letter-spacing: 0.22em;
-        text-transform: uppercase;
-        color: var(--ink-soft);
-      }
-      .eyebrow::before {
-        content: '';
-        width: 28px; height: 1px; background: var(--ink);
-      }
-
       .sec-num {
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.66rem;
@@ -540,6 +394,67 @@ function BlueprintStyles() {
       .foot .left { font-family: 'Instrument Serif', serif; font-style: italic; font-size: 1.1rem; text-transform: none; letter-spacing: 0; color: var(--ink); }
       .foot .mid { text-align: center; }
       .foot .right { text-align: right; }
+
+      /* ── Axis detail row (new 10-axis) ── */
+      .axis-row {
+        display: grid;
+        grid-template-columns: 100px 1fr 40px;
+        gap: 10px;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px dashed var(--rule-hair);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.68rem;
+        color: var(--ink-soft);
+        letter-spacing: 0.04em;
+      }
+      .axis-row:last-child { border-bottom: none; }
+      .axis-row .ax-label {
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-weight: 600;
+        color: var(--ink);
+        font-size: 0.62rem;
+      }
+      .axis-row .ax-bar {
+        height: 6px;
+        background: var(--rule-soft);
+        position: relative;
+        overflow: hidden;
+      }
+      .axis-row .ax-bar > span {
+        position: absolute; left: 0; top: 0; bottom: 0;
+        transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
+      }
+      .axis-row .ax-val {
+        text-align: right;
+        font-family: 'Instrument Serif', serif;
+        font-style: italic;
+        font-size: 1rem;
+        color: var(--ink);
+      }
+      .axis-detail {
+        font-size: 0.72rem;
+        color: var(--ink-soft);
+        padding: 4px 0 4px 110px;
+        line-height: 1.4;
+        font-style: italic;
+      }
+      .axis-items {
+        padding: 6px 0 6px 110px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.62rem;
+        color: var(--ink-soft);
+        line-height: 1.6;
+      }
+
+      /* ── Radar chart ── */
+      .radar-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem 0;
+      }
     `}</style>
   );
 }
@@ -556,13 +471,13 @@ function Tape() {
         <span>SHEET S-01 / EVALUATION</span>
         <span><b>►</b> READY FOR ANALYSIS</span>
         <span>DRAFTED IN AHMEDABAD</span>
-        <span>BUILD 0.4.1 — STABLE</span>
+        <span>BUILD 0.5.0 — 10-AXIS SCORING</span>
         <span><b>● STATIC</b> &nbsp; IMAGE CAPTURE SYSTEM</span>
         <span>YOLO-V8 · ONE-SHOT</span>
         <span>SHEET S-01 / EVALUATION</span>
         <span><b>►</b> READY FOR ANALYSIS</span>
         <span>DRAFTED IN AHMEDABAD</span>
-        <span>BUILD 0.4.1 — STABLE</span>
+        <span>BUILD 0.5.0 — 10-AXIS SCORING</span>
       </div>
     </div>
   );
@@ -578,7 +493,7 @@ function Nav({
   return (
     <nav className="nav">
       <Link href="/" className="nav-logo">
-        plan.vision <span className="stamp">REV-04</span>
+        plan.vision <span className="stamp">REV-05</span>
       </Link>
       <div className="nav-crumbs">
         <Link href="/">Home</Link>
@@ -602,7 +517,7 @@ function Foot() {
     <footer className="foot">
       <div className="foot-inner">
         <div className="left">plan.vision</div>
-        <div className="mid">Sheet S-01 · Static Image Upload Evaluation</div>
+        <div className="mid">Sheet S-01 · Static Image Upload · 10-Axis Scoring</div>
         <div className="right">© {new Date().getFullYear()} · all sheets reserved</div>
       </div>
     </footer>
@@ -610,7 +525,7 @@ function Foot() {
 }
 
 // ---------------------------------------------------------------------------
-// ScoreRow / ObjectList / CompositeBlock
+// ScoreRow / ObjectList
 // ---------------------------------------------------------------------------
 function ScoreRow({ label, value }: { label: string; value: number }) {
   const v = Math.max(0, Math.min(100, value));
@@ -653,14 +568,160 @@ function ObjectList({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Radar Chart (canvas-drawn)
+// ---------------------------------------------------------------------------
+function RadarChart({ axes }: { axes: AxisScore[] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const size = 240;
+    cv.width = size * dpr;
+    cv.height = size * dpr;
+    cv.style.width = `${size}px`;
+    cv.style.height = `${size}px`;
+    ctx.scale(dpr, dpr);
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = 90;
+    const n = axes.length;
+
+    ctx.clearRect(0, 0, size, size);
+
+    // Grid rings
+    for (let ring = 1; ring <= 4; ring++) {
+      const rr = (r * ring) / 4;
+      ctx.beginPath();
+      for (let i = 0; i <= n; i++) {
+        const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+        const x = cx + Math.cos(angle) * rr;
+        const y = cy + Math.sin(angle) * rr;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = ring === 4 ? "rgba(14,23,38,0.15)" : "rgba(14,23,38,0.07)";
+      ctx.lineWidth = ring === 4 ? 1 : 0.5;
+      ctx.stroke();
+    }
+
+    // Spokes
+    for (let i = 0; i < n; i++) {
+      const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+      ctx.strokeStyle = "rgba(14,23,38,0.08)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
+
+    // Data polygon
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const idx = i % n;
+      const angle = (Math.PI * 2 * idx) / n - Math.PI / 2;
+      const val = axes[idx].score / 100;
+      const x = cx + Math.cos(angle) * r * val;
+      const y = cy + Math.sin(angle) * r * val;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,87,34,0.12)";
+    ctx.fill();
+    ctx.strokeStyle = "#ff5722";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Data points + labels
+    for (let i = 0; i < n; i++) {
+      const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
+      const val = axes[i].score / 100;
+      const px = cx + Math.cos(angle) * r * val;
+      const py = cy + Math.sin(angle) * r * val;
+
+      // Dot
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "#ff5722";
+      ctx.fill();
+
+      // Label
+      const lx = cx + Math.cos(angle) * (r + 14);
+      const ly = cy + Math.sin(angle) * (r + 14);
+      ctx.font = "500 8px 'JetBrains Mono', monospace";
+      ctx.fillStyle = "#2a3346";
+      ctx.textAlign = Math.cos(angle) < -0.1 ? "right" : Math.cos(angle) > 0.1 ? "left" : "center";
+      ctx.textBaseline = Math.sin(angle) < -0.1 ? "bottom" : Math.sin(angle) > 0.1 ? "top" : "middle";
+      ctx.fillText(axes[i].label.toUpperCase(), lx, ly);
+    }
+  }, [axes]);
+
+  return (
+    <div className="radar-wrap">
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Axis Breakdown Panel (new 10-axis display)
+// ---------------------------------------------------------------------------
+function AxisBreakdown({ axes, expandedInit }: { axes: AxisScore[]; expandedInit?: boolean }) {
+  const [expanded, setExpanded] = useState<number | null>(expandedInit ? 0 : null);
+
+  return (
+    <div>
+      {axes.map((axis, i) => (
+        <div key={axis.label}>
+          <div
+            className="axis-row"
+            style={{ cursor: "pointer" }}
+            onClick={() => setExpanded(expanded === i ? null : i)}
+          >
+            <span className="ax-label">{axis.label}</span>
+            <span className="ax-bar">
+              <span style={{ width: `${axis.score}%`, background: scoreColor(axis.score) }} />
+            </span>
+            <span className="ax-val">{axis.score}</span>
+          </div>
+          {expanded === i && (
+            <>
+              <div className="axis-detail">{axis.detail}</div>
+              {axis.items && axis.items.length > 0 && (
+                <div className="axis-items">
+                  {axis.items.map((item, j) => (
+                    <div key={j}>{item}</div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CompositeBlock — now shows 10 axes
+// ---------------------------------------------------------------------------
 function CompositeBlock({
   overall,
   grade,
-  breakdown,
+  axes,
 }: {
   overall: number;
   grade: string;
-  breakdown: { zoning: number; coverage: number; connectivity: number; density: number };
+  axes: AxisScore[];
 }) {
   return (
     <div
@@ -670,7 +731,7 @@ function CompositeBlock({
         display: "grid",
         gridTemplateColumns: "1fr 1.4fr",
         gap: "2rem",
-        alignItems: "center",
+        alignItems: "start",
       }}
     >
       <div>
@@ -714,6 +775,9 @@ function CompositeBlock({
             {grade || gradeLetter(overall)}
           </span>
         </div>
+
+        {/* Radar chart */}
+        <RadarChart axes={axes} />
       </div>
       <div>
         <div
@@ -721,12 +785,9 @@ function CompositeBlock({
           style={{ marginBottom: "0.5rem", display: "flex", justifyContent: "space-between" }}
         >
           <span>Breakdown</span>
-          <span style={{ color: "var(--accent)" }}>4 axes</span>
+          <span style={{ color: "var(--accent)" }}>{axes.length} axes</span>
         </div>
-        <ScoreRow label="Zoning" value={breakdown.zoning ?? 0} />
-        <ScoreRow label="Coverage" value={breakdown.coverage ?? 0} />
-        <ScoreRow label="Connectivity" value={breakdown.connectivity ?? 0} />
-        <ScoreRow label="Density" value={breakdown.density ?? 0} />
+        <AxisBreakdown axes={axes} />
       </div>
     </div>
   );
@@ -743,6 +804,7 @@ export default function StaticUploadPage() {
   const [dragOver, setDragOver] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState<(AppState & { annotated_image?: string }) | null>(null);
+  const [clientEval, setClientEval] = useState<Evaluation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -766,6 +828,24 @@ export default function StaticUploadPage() {
     fetchRegistry().then((r) => { if (r) setRegistry(r); });
   }, []);
 
+  // Re-score with the client-side engine whenever YOLO results + registry are available
+  useEffect(() => {
+    if (!result?.objects || !registry) {
+      setClientEval(null);
+      return;
+    }
+
+    const objects = result.objects;
+    const frameW = result.frame_size?.width ?? 1280;
+    const frameH = result.frame_size?.height ?? 720;
+
+    const evaluation = evaluateLayout(objects, registry, {
+      frameWidth: frameW,
+      frameHeight: frameH,
+    });
+    setClientEval(evaluation);
+  }, [result, registry]);
+
   const handleFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) {
       setError("Please upload an image file (JPG, PNG, WEBP)");
@@ -774,6 +854,7 @@ export default function StaticUploadPage() {
     setError(null);
     setProcessing(true);
     setResult(null);
+    setClientEval(null);
     setPreviewUrl(URL.createObjectURL(file));
 
     const res = await detectImage(file);
@@ -801,7 +882,8 @@ export default function StaticUploadPage() {
     [handleFile]
   );
 
-  const evaluation = result?.evaluation;
+  // Use client-side eval (10-axis) as the primary evaluation
+  const evaluation = clientEval;
   const objects = result?.objects || [];
   const violations = evaluation?.violations || [];
   const suggestions = evaluation?.suggestions || [];
@@ -842,6 +924,16 @@ export default function StaticUploadPage() {
                   decide.
                 </span>
               </h1>
+              <p style={{
+                marginTop: "0.5rem",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "0.66rem",
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: "var(--ink-soft)",
+              }}>
+                10-axis scoring engine · zoning · synergy · coverage · network · diversity · density · placement · clustering · historical · completeness
+              </p>
             </div>
             <button onClick={() => router.push("/dashboard")} className="btn btn-ghost">
               ← Back to dashboard
@@ -892,7 +984,7 @@ export default function StaticUploadPage() {
                         color: "var(--ink-soft)",
                       }}
                     >
-                      YOLO running · evaluating zoning · coverage · graph
+                      YOLO detecting · 10-axis scoring engine running
                     </p>
                     {previewUrl && (
                       <img
@@ -1010,11 +1102,11 @@ export default function StaticUploadPage() {
                   <CompositeBlock
                     overall={evaluation.overall.overall}
                     grade={evaluation.overall.grade}
-                    breakdown={evaluation.overall.breakdown}
+                    axes={evaluation.overall.axes}
                   />
                 )}
 
-                {/* Detail rows */}
+                {/* Coverage detail */}
                 {evaluation?.coverage && evaluation.coverage.total_needing_coverage > 0 && (
                   <div className="card">
                     <div className="sec-h" style={{ marginBottom: "0.5rem" }}>Coverage detail</div>
@@ -1039,7 +1131,7 @@ export default function StaticUploadPage() {
 
                 <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                   <button
-                    onClick={() => { setResult(null); setPreviewUrl(null); }}
+                    onClick={() => { setResult(null); setPreviewUrl(null); setClientEval(null); }}
                     className="btn btn-ink"
                   >
                     Upload another <span className="arrow">→</span>
