@@ -3,7 +3,7 @@
 A computer vision system for real-time spatial planning analysis. Physical building blocks are arranged on a surface, detected via a custom-trained YOLOv8 model, and evaluated against spatial planning criteria -- zoning compliance, utility coverage, connectivity, and density balance -- all in real-time.
 
 > Model training notebook: [`model_training.ipynb`](model_training.ipynb)
-> Live Demo: https://skylark-lac.vercel.app/
+> Live Demo: https://archi-cv.vercel.app/
 
 ---
 
@@ -16,6 +16,7 @@ A computer vision system for real-time spatial planning analysis. Physical build
   - [Format Conversion](#format-conversion)
   - [Manual Labeling](#manual-labeling)
   - [Dataset Statistics](#dataset-statistics)
+  - [Dataset Balancing & Data Augmentation](#dataset-balancing--data-augmentation)
 - [Custom YOLOv8 Model](#custom-yolov8-model)
   - [Model Selection](#model-selection)
   - [Training Configuration](#training-configuration)
@@ -147,29 +148,52 @@ yolo_data/
 
 ### Dataset Statistics
 
-| Metric                          | Value        |
-|---------------------------------|--------------|
-| Total images                    | 255          |
-| Total object instances          | 255          |
-| Number of classes               | 7            |
-| Images per class (approximate)  | See below    |
-| Annotation format               | YOLO (normalized bbox) |
-| Image resolution                | Variable (phone camera native) |
-| Training input size             | 640 x 640    |
-| Backgrounds                     | 0            |
-| Corrupt/unusable                | 0            |
+The `yolo backend` workspace contains **1,775 total image files** across raw captures, format conversions, train/val/test splits, and inference outputs:
 
-**Per-Class Image Distribution:**
+- **Raw Captured Images**: **367** original high-resolution photographs across 7 building classes.
+- **Converted Images**: **367** normalized JPEG format images (1:1 conversion from raw/HEIC).
+- **Final Dataset Split (V2)**: **367** images partitioned into:
+  - `train`: **255** images (70%)
+  - `val`: **71** images (20%)
+  - `test`: **41** images (10%)
+- **Extended Dataset Workspace (V1)**: **595** images (`train`: 332, `val`: 129, `test`: 76, `train_bead`: 58).
+- **Run Outputs & Plots**: **79** evaluation plots and inference result images.
 
-| Class ID | Class Name         | Images | Instances |
-|----------|--------------------|--------|-----------|
-| 0        | warehouse          | 35     | 35        |
-| 1        | reservoir          | 46     | 46        |
-| 2        | loading_platform   | 39     | 39        |
-| 3        | dockyard           | 28     | 28        |
-| 4        | citadel            | 36     | 36        |
-| 5        | big_house          | 27     | 27        |
-| 6        | bead_factory       | 44     | 44        |
+| Metric                          | Value                                                  |
+|---------------------------------|--------------------------------------------------------|
+| Total image files in backend    | 1,775                                                  |
+| Total raw captured images       | 367                                                    |
+| Training split size             | 255 images (255 instances)                             |
+| Validation split size           | 71 images                                              |
+| Test split size                 | 41 images                                              |
+| Number of classes               | 7                                                      |
+| Annotation format               | YOLO format (normalized `class x_center y_center w h`) |
+| Training input size             | 640 x 640                                              |
+| Corrupt / Unusable images       | 0 (all validated and restored)                         |
+
+**Per-Class Image Distribution (Raw Captures & Training Split):**
+
+| Class ID | Class Name         | Display Name | Raw Images | Train Split | Train Instances | Share (%) |
+|----------|--------------------|--------------|------------|-------------|-----------------|-----------|
+| 0        | warehouse          | Depot        | 50         | 35          | 35              | 13.7%     |
+| 1        | reservoir          | Reservoir    | 67         | 46          | 46              | 18.0%     |
+| 2        | loading_platform   | FreightDeck  | 56         | 39          | 39              | 15.3%     |
+| 3        | dockyard           | Harbor       | 40         | 28          | 28              | 11.0%     |
+| 4        | citadel            | Fortress     | 52         | 36          | 36              | 14.1%     |
+| 5        | big_house          | Residence    | 39         | 27          | 27              | 10.6%     |
+| 6        | bead_factory       | Factory      | 63         | 44          | 44              | 17.3%     |
+| **Total**|                    |              | **367**    | **255**     | **255**         | **100%**  |
+
+### Dataset Balancing & Data Augmentation
+
+To address slight class imbalance between majority classes (e.g., `reservoir` at 18.0%) and minority classes (e.g., `big_house` at 10.6%), **dynamic online data augmentation** was implemented during training rather than static offline duplication:
+
+1. **Mosaic Augmentation (`mosaic = 1.0`)**: Stitches 4 random training images from different classes into a single composite frame per iteration. This naturally balances class co-occurrence and forces the model to detect objects across varying spatial densities and scale variations.
+2. **Spatial Flips (`flipud = 0.5`, `fliplr = 0.5`)**: Provides full 4-way rotational invariance (vertical and horizontal flips), essential for overhead camera placement where building blocks have no intrinsic "up" orientation.
+3. **Rotation Jitter (`degrees = ±15.0°`)**: Simulates minor mounting angle variations and crooked placement on the model surface.
+4. **Scale Jitter (`scale = 0.5`)**: Randomly scales input dimensions by ±50% to simulate variations in camera height and distance.
+5. **Color Space Tuning (`hsv_s = 0.4`, `hsv_h = 0.015`, `hsv_v = 0.4`)**: Saturation shift was explicitly restricted from the default 0.7 to 0.4 to prevent color-shifting confusion between visual classes (e.g., maintaining clear distinction between yellow bead factories and light residential blocks).
+6. **Synthetic Dataset Expansion**: Over 100 training epochs, online augmentation dynamically generated over **2,500+ unique synthetic image views** from the 255 training split images, ensuring strong generalization without overfitting to minority classes.
 
 ---
 
@@ -203,9 +227,7 @@ Training was performed on a local GPU using the following hyperparameters, docum
 | `device`           | 0       | CUDA GPU                                                    |
 | `optimizer`        | auto    | Automatically selected MuSGD (lr=0.000909, momentum=0.9)   |
 
-**Augmentation Strategy:**
-
-Augmentation was specifically tuned for overhead/top-down object photography:
+**Augmentation Strategy Summary:**
 
 | Augmentation     | Value | Rationale                                                     |
 |------------------|-------|---------------------------------------------------------------|
