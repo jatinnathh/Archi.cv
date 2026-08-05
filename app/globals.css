@@ -7,7 +7,7 @@
 
 :root {
   /* Core palette */
-  --bg: #080808;
+  --bg: #000000;
   --text: #F0EDE6;
   --text-dim: #8A8680;
   --gold: #C9A84C;
@@ -21,10 +21,10 @@
   --font-body: var(--font-mono, "Space Mono", "Courier New", monospace);
 
   /* Dashboard compat */
-  --bg-primary: #080808;
-  --bg-secondary: #0E0E0E;
+  --bg-primary: #000000;
+  --bg-secondary: #000000;
   --bg-card: #141414;
-  --bg-card-hover: #1A1A1A;
+  --bg-card-hover: #000000;
   --bg-elevated: #1E1E1E;
   --text-primary: #F0EDE6;
   --text-secondary: #8A8680;
@@ -36,7 +36,7 @@
   --warning: #FBBF24;
   --error: #EF4444;
   --info: #60A5FA;
-  --border: #1E1E1E;
+  --border: #000000;
   --border-light: #2A2A2A;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
@@ -586,7 +586,7 @@ body {
   max-width: 90vw;
   border: 0.5px solid var(--gold-border);
   padding: 64px;
-  background: rgba(8, 8, 8, 0.85);
+  background: rgba(0, 0, 0, 0.85);
 }
 
 .featured-label {
@@ -1135,7 +1135,7 @@ body {
 }
 .snapshot-item.selected {
   border-color: var(--accent);
-  background: rgba(201, 168, 76, 0.05);
+  background: rgba(0, 0, 0, 0.05);
 }
 .compare-grid {
   display: grid;
@@ -1240,7 +1240,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(8, 8, 8, 0.8);
+  background: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }

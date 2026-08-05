@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Cormorant_Garamond, Space_Mono } from "next/font/google";
 import "./globals.css";
+import PageVisitTracker from "./components/PageVisitTracker";
 
 const cormorant = Cormorant_Garamond({
   variable: "--font-display",
@@ -37,7 +38,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${cormorant.variable} ${spaceMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <PageVisitTracker />
+        {children}
+      </body>
     </html>
   );
 }

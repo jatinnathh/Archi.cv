@@ -1,6 +1,9 @@
-# PlanVision — Real-Time Spatial Planning Evaluation System
+# PlanVision -- Real-Time Spatial Planning Evaluation System
 
-A computer vision system for real-time spatial planning analysis. Physical building blocks are arranged on a surface, detected via a custom-trained YOLOv8 model, and evaluated against spatial planning criteria — zoning compliance, utility coverage, connectivity, and density balance — all in real-time.
+A computer vision system for real-time spatial planning analysis. Physical building blocks are arranged on a surface, detected via a custom-trained YOLOv8 model, and evaluated against spatial planning criteria -- zoning compliance, utility coverage, connectivity, and density balance -- all in real-time.
+
+> Model training notebook: [`model_training.ipynb`](model_training.ipynb)
+> Live Demo: https://skylark-lac.vercel.app/
 
 ---
 
@@ -8,11 +11,18 @@ A computer vision system for real-time spatial planning analysis. Physical build
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Data Pipeline](#data-pipeline)
+  - [Image Acquisition](#image-acquisition)
+  - [Format Conversion](#format-conversion)
+  - [Manual Labeling](#manual-labeling)
+  - [Dataset Statistics](#dataset-statistics)
 - [Custom YOLOv8 Model](#custom-yolov8-model)
-  - [Dataset Preparation](#dataset-preparation)
-  - [Labeling](#labeling)
-  - [Training](#training)
-  - [Model Performance](#model-performance)
+  - [Model Selection](#model-selection)
+  - [Training Configuration](#training-configuration)
+  - [Training Runs and Iteration](#training-runs-and-iteration)
+  - [Final Model Performance](#final-model-performance)
+  - [Per-Class Performance](#per-class-performance)
+  - [Inference Latency](#inference-latency)
 - [Spatial Evaluation Engine](#spatial-evaluation-engine)
 - [Block Registry](#block-registry)
 - [Web Dashboard](#web-dashboard)
@@ -31,8 +41,8 @@ PlanVision bridges physical model-building with computational planning analysis.
 
 The system provides two modes of operation:
 
-- **Image Upload** — Upload a photograph of a block layout for one-shot analysis.
-- **Live Camera** — Continuous real-time detection and evaluation at approximately 28 fps.
+- **Image Upload** -- Upload a photograph of a block layout for one-shot analysis.
+- **Live Camera** -- Continuous real-time detection and evaluation at approximately 28 fps.
 
 ---
 
@@ -42,69 +52,252 @@ The system provides two modes of operation:
 
 ## Architecture
 
+The system follows a three-stage pipeline: image acquisition, object detection, and spatial evaluation. The detection backend and evaluation engine run as a unified Flask server, while the frontend consumes results via a polling-based REST API.
+
 ```
-+----------------+    YOLOv8     +------------------+   Spatial    +--------------------+
-|   Webcam /     | -----------> |  Object          | ----------> |  Evaluation        |
-|   Uploaded     |              |  Detection       |             |  Engine            |
-|   Image        |              |  (mai.py)        |             |  (spatial_engine)  |
-+----------------+              +--------+---------+             +---------+----------+
-                                         |                                 |
-                                  OpenCV Window                     Flask API :5000
-                                  (Annotated Feed)                         |
-                                                                +----------+---------+
-                                                                |  Next.js :3000     |
-                                                                |  +---------------+ |
-                                                                |  | Dashboard     | |
-                                                                |  | Compare       | |
-                                                                |  | Landing       | |
-                                                                |  +---------------+ |
-                                                                +--------------------+
+                                SYSTEM ARCHITECTURE
+
++-------------------+     YOLOv8      +-------------------+    Spatial     +---------------------+
+|   Webcam /        | -------------> |   Object           | -----------> |   Evaluation         |
+|   Uploaded        |                |   Detection        |              |   Engine             |
+|   Image           |                |   (mai.py)         |              |   (spatial_engine)   |
++-------------------+                +---------+----------+              +----------+-----------+
+                                               |                                    |
+                                        OpenCV Window                         Flask API :5000
+                                        (Annotated Feed)                            |
+                                                                          +---------+----------+
+                                                                          |   Next.js :3000    |
+                                                                          |  +---------------+ |
+                                                                          |  | Dashboard     | |
+                                                                          |  | Compare       | |
+                                                                          |  | Landing       | |
+                                                                          |  +---------------+ |
+                                                                          +--------------------+
 ```
+
+### Data Flow Diagram
+
+```
+  Raw Photos           Converted          Labeled            Trained           Deployed
+  (HEIC/JPG)           (JPG)             (YOLO fmt)          Model             System
+ +---------+         +---------+        +---------+       +---------+       +---------+
+ |  Phone  | ------> | Format  | -----> | Manual  | ----> | YOLOv8  | ----> | Flask + |
+ |  Camera | convert | .jpg    | label  | BBox    | train | nano    | serve | Next.js |
+ +---------+         +---------+        +---------+       +---------+       +---------+
+     255 images          255 images        255 labels        best.pt          Live/Upload
+```
+
+---
+
+## Data Pipeline
+
+### Image Acquisition
+
+All training images were **manually captured** using a phone camera. Physical building blocks (coloured wooden/plastic pieces representing town planning structures) were placed on a flat surface and photographed from varying angles, distances, and lighting conditions.
+
+Multiple photography sessions were conducted to ensure dataset diversity:
+
+| Factor                   | Variation                                              |
+|--------------------------|--------------------------------------------------------|
+| Camera angle             | Overhead, slight tilt                                  |
+| Lighting                 | Natural daylight, artificial indoor light              |
+| Background surface       | Varied flat surfaces                                   |
+| Objects per frame        | Single object per image (one class per photo)          |
+| Distance                 | Near (~20 cm) to far (~50 cm)                          |
+| Original format          | HEIC (Apple), JPG                                      |
+
+### Format Conversion
+
+Raw images from the phone camera were captured in HEIC format. A preprocessing step in [`model_training.ipynb`](model_training.ipynb) converts all HEIC files to JPEG at 95% quality using `pillow-heif`, while preserving the directory structure organized by class.
+
+```python
+# HEIC to JPG conversion (from model_training.ipynb)
+pillow_heif.register_heif_opener()
+img = Image.open(src).convert("RGB")
+img.save(dst, "JPEG", quality=95)
+```
+
+### Manual Labeling
+
+Every image in the dataset was **manually annotated by hand** with bounding box labels. No automated or semi-automated labeling tools were used. Each object instance was individually labeled with one of seven class categories corresponding to building types in the town planning model.
+
+Annotations were exported in YOLO format -- one `.txt` file per image containing normalized coordinates:
+
+```
+class_id  x_center  y_center  width  height
+```
+
+All values are normalized to `[0, 1]` relative to image dimensions.
+
+The labeled data was organized into the standard YOLO directory structure:
+
+```
+yolo_data/
+  images/
+    train/
+      Warehouse_IMG20260122185618.jpg
+      Reservoir_IMG20260122185239.jpg
+      ...
+  labels/
+    train/
+      Warehouse_IMG20260122185618.txt
+      Reservoir_IMG20260122185239.txt
+      ...
+```
+
+### Dataset Statistics
+
+| Metric                          | Value        |
+|---------------------------------|--------------|
+| Total images                    | 255          |
+| Total object instances          | 255          |
+| Number of classes               | 7            |
+| Images per class (approximate)  | See below    |
+| Annotation format               | YOLO (normalized bbox) |
+| Image resolution                | Variable (phone camera native) |
+| Training input size             | 640 x 640    |
+| Backgrounds                     | 0            |
+| Corrupt/unusable                | 0            |
+
+**Per-Class Image Distribution:**
+
+| Class ID | Class Name         | Images | Instances |
+|----------|--------------------|--------|-----------|
+| 0        | warehouse          | 35     | 35        |
+| 1        | reservoir          | 46     | 46        |
+| 2        | loading_platform   | 39     | 39        |
+| 3        | dockyard           | 28     | 28        |
+| 4        | citadel            | 36     | 36        |
+| 5        | big_house          | 27     | 27        |
+| 6        | bead_factory       | 44     | 44        |
 
 ---
 
 ## Custom YOLOv8 Model
 
-### Dataset Preparation
+### Model Selection
 
-The training dataset was built from scratch. Physical building blocks were arranged in various configurations on a flat surface under controlled lighting. Photographs were captured from a fixed overhead camera position at 1280x720 resolution.
+The system uses **YOLOv8 Nano** (`yolov8n.pt`) as the base architecture, selected for its balance of speed and accuracy on resource-constrained hardware.
 
-Multiple sessions were conducted with varying:
-- Block arrangements and spacing
-- Lighting conditions (natural and artificial)
-- Background surfaces
-- Number of objects per frame (2 to 7 simultaneously)
+| Property              | Value                                    |
+|-----------------------|------------------------------------------|
+| Architecture          | YOLOv8n (Ultralytics)                    |
+| Base weights          | COCO-pretrained (`yolov8n.pt`)           |
+| Total parameters      | 3,007,013                                |
+| Model size (fused)    | 73 layers, ~6.2 MB                       |
+| GFLOPs                | 8.1                                      |
+| Framework             | Ultralytics 8.4.7                        |
+| Runtime               | PyTorch 2.5.1 + CUDA                     |
+| GPU                   | NVIDIA GeForce RTX 3050 Laptop (4 GB)    |
 
-### Labeling
+### Training Configuration
 
-All images were **manually annotated** using bounding box labels. Each object instance was labeled with one of seven class categories corresponding to building types in a town planning model:
+Training was performed on a local GPU using the following hyperparameters, documented in [`model_training.ipynb`](model_training.ipynb):
 
-| Class ID | Display Name | Description                        |
-|----------|--------------|-------------------------------------|
-| 0        | Depot        | Industrial storage facility         |
-| 1        | Reservoir    | Water utility with coverage radius  |
-| 2        | FreightDeck  | Logistics node, acts as road        |
-| 3        | Harbor       | Port facility                       |
-| 4        | Fortress     | Administrative residential center   |
-| 5        | Residence    | Residential dwelling                |
-| 6        | Factory      | Commercial manufacturing unit       |
+| Parameter          | Value   | Rationale                                                   |
+|--------------------|---------|-------------------------------------------------------------|
+| `epochs`           | 100     | Sufficient convergence window; early stopping applied       |
+| `patience`         | 15      | Stop if no mAP improvement for 15 consecutive epochs        |
+| `imgsz`            | 640     | Standard YOLOv8 input; balances detail with speed           |
+| `batch`            | 8       | Constrained by 4 GB GPU VRAM                                |
+| `device`           | 0       | CUDA GPU                                                    |
+| `optimizer`        | auto    | Automatically selected MuSGD (lr=0.000909, momentum=0.9)   |
 
-Annotations were exported in YOLO format (normalized `class x_center y_center width height` per line) and organized into the standard `images/` and `labels/` directory structure.
+**Augmentation Strategy:**
 
-### Training
+Augmentation was specifically tuned for overhead/top-down object photography:
 
-The model was trained using the Ultralytics YOLOv8 framework. Key training parameters:
+| Augmentation     | Value | Rationale                                                     |
+|------------------|-------|---------------------------------------------------------------|
+| `flipud`         | 0.5   | Critical for top-down views -- objects have no natural "up"   |
+| `fliplr`         | 0.5   | Standard horizontal flip                                      |
+| `degrees`        | 15.0  | Handles slight rotational variance in camera placement        |
+| `mosaic`         | 1.0   | Combines 4 images per sample; essential for small datasets    |
+| `scale`          | 0.5   | Simulates varying camera distances                            |
+| `hsv_s`          | 0.4   | Reduced saturation jitter to preserve color-based class cues  |
+| `hsv_h`          | 0.015 | Minimal hue shift to avoid confusing similar-colored objects   |
+| `hsv_v`          | 0.4   | Moderate brightness variation                                 |
 
+### Training Runs and Iteration
 
-Training was executed across multiple runs with iterative refinement of the dataset (augmentation, re-labeling ambiguous samples, adding edge cases). The final production model is located at:
+The model was developed through **four iterative training runs**, each improving on the previous through dataset refinement, hyperparameter tuning, and class adjustments.
+
+| Run   | Name                         | Dataset  | Classes | Images | Epochs Run | Best Epoch | mAP50 (best) | mAP50-95 (best) |
+|-------|------------------------------|----------|---------|--------|------------|------------|--------------|-----------------|
+| 1     | `town_planning_run`          | data.yaml| 7       | --     | Failed*    | --         | --           | --              |
+| 2     | `town_planning_run2`         | data_bead| 1       | 58     | 45         | 25         | 0.985        | 0.751           |
+| 3     | `town_planning_final_run`    | data.yaml| 7       | 255    | --         | --         | --           | --              |
+| 4     | `town_planning_final_run4`   | data.yaml| 7       | 255    | 85         | 70         | 0.995        | 0.832           |
+
+*Run 1 failed due to a missing `data.yaml` path configuration. Run 2 was a single-class pilot (bead_factory only) used to validate the pipeline. Run 4 is the production model.
+
+**Training Convergence (Final Run -- 7 Classes, 255 Images):**
 
 ```
-yolo backend/runs/detect/runs/detect/town_planning_final_run4/weights/best.pt
+Epoch    mAP50    mAP50-95    Box Loss    Cls Loss
+  1      0.317     0.139       1.364       3.120
+  5      0.473     0.290       1.197       2.782
+ 10      0.716     0.530       1.068       2.390
+ 20      0.965     0.700       1.008       1.797
+ 30      0.988     0.683       0.978       1.495
+ 40      0.992     0.766       0.864       1.352
+ 50      0.993     0.770       0.856       1.276
+ 58      0.995     0.817       0.850       1.260     <-- mAP50-95 plateau begins
+ 67      0.995     0.821       0.787       1.210
+ 70      0.995     0.832       0.793       1.146     <-- Best model (EarlyStopping)
+ 85      0.995     0.830       0.768       1.143     <-- Training stopped (patience=15)
 ```
 
-### Model Performance
+Training completed in **0.405 hours** (approximately 24 minutes).
 
-The trained model operates at a confidence threshold of 0.40 in production. Detection is performed on every frame during live camera mode, and spatial evaluation is computed every third frame to balance responsiveness with computational load.
+### Final Model Performance
+
+The production model (`town_planning_final_run4/weights/best.pt`) achieves the following overall metrics:
+
+| Metric                | Value       |
+|-----------------------|-------------|
+| Precision (P)         | 0.992       |
+| Recall (R)            | 0.999       |
+| mAP@50                | 0.995       |
+| mAP@50-95             | 0.832       |
+| Confidence threshold  | 0.40        |
+| Total training images | 255         |
+| Total training epochs | 85 (early stop at 70) |
+
+### Per-Class Performance
+
+| Class              | Images | Instances | Precision | Recall | mAP@50 | mAP@50-95 |
+|--------------------|--------|-----------|-----------|--------|--------|-----------|
+| warehouse          | 35     | 35        | 0.990     | 1.000  | 0.995  | 0.891     |
+| reservoir          | 46     | 46        | 0.996     | 1.000  | 0.995  | 0.897     |
+| loading_platform   | 39     | 39        | 1.000     | 0.993  | 0.995  | 0.704     |
+| dockyard           | 28     | 28        | 0.984     | 1.000  | 0.995  | 0.817     |
+| citadel            | 36     | 36        | 0.989     | 1.000  | 0.995  | 0.846     |
+| big_house          | 27     | 27        | 0.983     | 1.000  | 0.995  | 0.826     |
+| bead_factory       | 44     | 44        | 1.000     | 0.999  | 0.995  | 0.832     |
+| **All (macro avg)**| **255**| **255**   | **0.992** |**0.999**|**0.995**|**0.832** |
+
+**Key Observations:**
+
+- All 7 classes achieve a perfect or near-perfect mAP@50 of **0.995**.
+- Precision and recall are both above **0.98** for every class.
+- The `reservoir` class achieves the highest mAP@50-95 (**0.897**), likely due to its distinctive shape.
+- The `loading_platform` class has the lowest mAP@50-95 (**0.704**), suggesting bounding box localization is slightly less tight for this class due to its flat, elongated geometry.
+- Despite a relatively small dataset (255 images), the aggressive augmentation strategy (mosaic, flip, rotation) compensated effectively.
+
+### Inference Latency
+
+| Stage         | Time per image |
+|---------------|----------------|
+| Preprocess    | 0.5 ms         |
+| Inference     | 10.6 ms        |
+| Loss          | 0.0 ms         |
+| Postprocess   | 3.2 ms         |
+| **Total**     | **~14.3 ms**   |
+
+Measured on NVIDIA GeForce RTX 3050 Laptop GPU at 640x640 input resolution.
+
+In production (live camera mode), detection runs at the full frame rate while spatial evaluation is computed every third frame to balance responsiveness with computational load.
 
 ---
 
@@ -117,8 +310,18 @@ The evaluation engine (`spatial_engine.py`) runs four independent analyses on ea
 Checks every pair of detected buildings against a zone compatibility matrix. Industrial buildings placed too close to residential zones trigger violations. Each building type defines a buffer zone radius, and the system flags violations when incompatible buildings are closer than the required buffer distance.
 
 Severity levels:
-- **Critical** — Distance is less than 50% of the required buffer
-- **Warning** — Distance is less than the required buffer but above the critical threshold
+- **Critical** -- Distance is less than 50% of the required buffer
+- **Warning** -- Distance is less than the required buffer but above the critical threshold
+
+**Zone Compatibility Matrix:**
+
+```
+                industrial   residential   commercial   utility
+industrial         OK           FAIL           OK         OK
+residential       FAIL           OK            OK         OK
+commercial         OK            OK            OK         OK
+utility            OK            OK            OK         OK
+```
 
 ### 2. Water Coverage (Weight: 25%)
 
@@ -163,8 +366,8 @@ An architect's blueprint-style landing page with a live detection viewport mocku
 
 ### Dashboard (`/dashboard`)
 Two input modes:
-- **Upload Image** — Drag-and-drop or file picker. The image is sent to the backend, which returns an annotated image with bounding boxes, distance lines, violation markers, and a score HUD overlaid directly on the photograph, alongside full evaluation results.
-- **Live Camera** — Polls the backend at 500ms intervals for real-time detection state. Displays detected buildings, score breakdowns, violations, suggestions, density heatmap, and scenario management controls.
+- **Upload Image** -- Drag-and-drop or file picker. The image is sent to the backend, which returns an annotated image with bounding boxes, distance lines, violation markers, and a score HUD overlaid directly on the photograph, alongside full evaluation results.
+- **Live Camera** -- Polls the backend at 500ms intervals for real-time detection state. Displays detected buildings, score breakdowns, violations, suggestions, density heatmap, and scenario management controls.
 
 ### Compare (`/compare`)
 Side-by-side comparison of two saved layout snapshots. Displays per-axis score deltas and declares a winner based on overall composite score.
@@ -194,6 +397,8 @@ All endpoints are served by the Flask backend on port 5000.
 
 ```
 archi/
+|-- model_training.ipynb              Jupyter notebook: full training pipeline
+|
 |-- app/                              Next.js frontend
 |   |-- page.tsx                      Landing page
 |   |-- layout.tsx                    Root layout with Geist fonts
@@ -291,7 +496,7 @@ If running with a GUI-capable OpenCV build:
 The overall layout score is a weighted composite ranging from 0 to 100:
 
 | Metric             | Weight | Measurement                                        |
-|--------------------|--------|----------------------------------------------------|
+|--------------------|--------|--------------------------------------------------  |
 | Zoning Compliance  | 30%    | Penalty per zone violation, scaled by total pairs   |
 | Water Coverage     | 25%    | Percentage of residential blocks within reservoir radius |
 | Connectivity       | 25%    | Percentage of buildings in the largest connected component |
@@ -311,4 +516,4 @@ The overall layout score is a weighted composite ranging from 0 to 100:
 
 ## License
 
-Academic project — spatial planning analysis system.
+Academic project -- spatial planning analysis system.
