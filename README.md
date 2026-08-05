@@ -2,7 +2,7 @@
 
 A computer vision system for real-time spatial planning analysis. Physical building blocks are arranged on a surface, detected via a custom-trained YOLOv8 model, and evaluated against spatial planning criteria -- zoning compliance, utility coverage, connectivity, and density balance -- all in real-time.
 
-> Model training notebook: [`model_training.ipynb`](model_training.ipynb)
+> EDA and Model training notebook: [`model_training.ipynb`](model_training.ipynb)
 > Live Demo: https://archi-cv.vercel.app/
 
 ---
